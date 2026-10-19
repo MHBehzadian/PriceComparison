@@ -1,0 +1,17 @@
+[Unit]
+Description=PriceComparison - price tracking panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pricecomparison
+EnvironmentFile=-/etc/default/pricecomparison
+ExecStart=/opt/pricecomparison/venv/bin/python -m pricecomparison --data /var/lib/pricecomparison serve
+Restart=always
+RestartSec=3
+Nice=10
+MemoryMax=400M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PriceComparison</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111'/%3E%3Cpath d='M8 23h16' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3Crect x='9' y='15' width='3.2' height='6' rx='1' fill='%23fff'/%3E%3Crect x='14.4' y='10' width='3.2' height='11' rx='1' fill='%23fff'/%3E%3Crect x='19.8' y='17' width='3.2' height='4' rx='1' fill='%2322c55e'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<script>
+  // theme before first paint: saved choice, else the system's
+  (function () {
+    try {
+      var t = localStorage.getItem("pc-theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = t;
+    } catch (e) { document.documentElement.dataset.theme = "dark"; }
+  })();
+</script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="auth" class="auth hidden">
+  <form class="auth-card" id="auth-form">
+    <div class="brand big"><span class="logo"></span><span>PriceComparison</span></div>
+    <p class="muted" id="auth-sub">ورود به پنل مقایسه قیمت</p>
+    <label>نام کاربری<input name="username" autocomplete="username" required value="admin"></label>
+    <label>رمز عبور<input name="password" type="password" autocomplete="current-password" required minlength="6"></label>
+    <button class="btn primary wide" type="submit" id="auth-btn">ورود</button>
+    <p class="error" id="auth-err"></p>
+  </form>
+</div>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span><span>PriceComparison</span><span class="ver" id="ver"></span></div>
+    <div class="stats" id="stats"></div>
+    <div class="actions">
+      <span class="live" id="live" title="اتصال زنده به پنل"><i></i><span id="last-check">—</span></span>
+      <button class="btn" id="btn-check" title="خواندن دوباره قیمت همه محصولات از همه سایت‌ها">بررسی همه</button>
+      <div class="menu">
+        <button class="btn primary" id="btn-add">＋ افزودن</button>
+        <div class="menu-pop" id="add-pop">
+          <button data-add="product">محصول</button>
+          <button data-add="offer">لینک محصول در یک سایت</button>
+          <button data-add="site">سایت (منبع قیمت)</button>
+        </div>
+      </div>
+      <button class="btn icon" id="btn-settings" title="تنظیمات" aria-label="تنظیمات">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+      <button class="btn icon" id="btn-theme" title="روشن / تاریک" aria-label="تم">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
+      </button>
+      <button class="btn icon" id="btn-logout" title="خروج" aria-label="خروج">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="bench">
+      <aside class="plist">
+        <input type="search" id="psearch" placeholder="جستجوی محصول…">
+        <div class="pitems" id="pitems"></div>
+      </aside>
+      <section class="detail" id="detail"></section>
+    </section>
+
+    <section class="lower">
+      <div class="panel">
+        <div class="panel-head">
+          <h3>سایت‌ها (منابع قیمت)</h3>
+          <button class="btn sm" data-add="site">＋ سایت</button>
+        </div>
+        <div class="table-wrap"><table class="grid" id="sites-table"></table></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h3>رویدادها</h3>
+          <div class="seg" id="ev-filter">
+            <button data-f="all" class="on">همه</button>
+            <button data-f="success">کاهش / موفق</button>
+            <button data-f="warning">افزایش / هشدار</button>
+            <button data-f="error">خطا</button>
+          </div>
+        </div>
+        <ol class="events" id="events"></ol>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal" id="modal"><form class="modal-card" id="modal-form"></form></div>
+  <div class="tip" id="tip"></div>
+  <div class="toasts" id="toasts"></div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
