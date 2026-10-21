@@ -70,6 +70,7 @@ function short(v) {
 }
 const pct = (v) => `${nf1.format(v)}٪`;
 const site = (id) => S.sites.find((s) => s.id === id);
+const shopLink = (o, label) => `<a class="shop" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">${label} ${ICON.go}</a>`;
 const product = (id) => S.products.find((p) => p.id === id);
 const offersOf = (pid) => S.offers.filter((o) => o.product_id === pid);
 const sname = (id) => (site(id) || {}).name || "?";
@@ -110,8 +111,8 @@ function clock(ts) {
 }
 const date = (ts, opt = { month: "short", day: "numeric" }) => new Date(ts * 1000).toLocaleDateString("fa-IR", opt);
 const ICON = {
+  go: `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M7 17 17 7M8 7h9v9"/></svg>`,
   check: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>`,
-  open: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`,
   pause: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5v14M15 5v14"/></svg>`,
   play: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 5l12 7-12 7z"/></svg>`,
   del: `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`,
@@ -207,16 +208,30 @@ setInterval(() => {
 }, 1000);
 
 /* ---------------------------------------------------------- product list */
-function renderList() {
+let picking = false;          // product list in multi-select mode
+const picked = new Set();
+const listed = () => {
   const q = query.trim().toLowerCase();
-  const list = S.products.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q));
+  return S.products.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q));
+};
+
+function renderList() {
+  const list = listed();
+  for (const id of [...picked]) if (!product(id)) picked.delete(id);
+  $("#pcount").textContent = query.trim() ? `${nf.format(list.length)} از ${nf.format(S.products.length)} محصول` : `${nf.format(S.products.length)} محصول`;
+  $("#btn-pick").classList.toggle("hidden", !S.products.length);
+  $("#btn-pick").textContent = picking ? "لغو انتخاب" : "انتخاب و حذف چندتایی";
+  $("#pick-bar").classList.toggle("hidden", !picking);
+  $("#pick-n").textContent = `${nf.format(picked.size)} انتخاب شده`;
+  $("#pick-del").disabled = !picked.size;
+  $("#pitems").classList.toggle("picking", picking);
   $("#pitems").innerHTML = list.map((p) => {
     const sm = summary(p.id);
     const best = sm.best
       ? `<b>${short(sm.min)}</b><span class="sep">·</span><span>${esc(sname(sm.best.site_id))}</span>`
       : `<span>${sm.all.length ? "قیمتی خوانده نشده" : "بدون لینک"}</span>`;
-    return `<button class="pitem ${p.id === sel ? "on" : ""}" data-p="${p.id}">
-      <span class="pn">${esc(p.name)}</span>
+    return `<button class="pitem ${p.id === sel && !picking ? "on" : ""} ${picked.has(p.id) ? "picked" : ""}" data-p="${p.id}">
+      <span class="pn">${picking ? `<input type="checkbox" tabindex="-1" ${picked.has(p.id) ? "checked" : ""}> ` : ""}${esc(p.name)}</span>
       <span class="pp">${best}<span class="sep">·</span><span>${nf.format(sm.all.length)} سایت</span>
       ${sm.errors ? `<span class="chip bad">${nf.format(sm.errors)} خطا</span>` : ""}
       ${p.category ? `<span class="chip">${esc(p.category)}</span>` : ""}</span></button>`;
@@ -226,7 +241,22 @@ $("#psearch").oninput = (e) => { query = e.target.value; renderList(); };
 $("#pitems").onclick = (e) => {
   const b = e.target.closest("[data-p]");
   if (!b) return;
-  select(b.dataset.p);
+  if (!picking) return select(b.dataset.p);
+  e.preventDefault();
+  picked.has(b.dataset.p) ? picked.delete(b.dataset.p) : picked.add(b.dataset.p);
+  renderList();
+};
+$("#btn-pick").onclick = () => { picking = !picking; picked.clear(); renderList(); };
+$("#pick-all").onclick = () => { listed().forEach((p) => picked.add(p.id)); renderList(); };
+$("#pick-none").onclick = () => { picked.clear(); renderList(); };
+$("#pick-del").onclick = async () => {
+  const ids = [...picked];
+  if (!ids.length || !confirm(`${nf.format(ids.length)} محصول و همه لینک‌ها و تاریخچه قیمتشان حذف شود؟`)) return;
+  const r = await act(() => api("POST", "/api/products/delete", { ids }));
+  toast(`${nf.format(r.deleted)} محصول حذف شد`, "success");
+  picking = false;
+  picked.clear();
+  if (S) renderList();
 };
 function select(pid) {
   sel = pid;
@@ -266,12 +296,13 @@ function renderDetail() {
           <button class="btn sm" data-check-product="${p.id}" ${working ? "disabled" : ""}>${working ? `<span class="spin"></span> در حال بررسی` : "بررسی قیمت‌ها"}</button>
           <button class="btn sm" data-add="offer">＋ لینک سایت</button>
           <button class="btn sm" data-edit-product="${p.id}">ویرایش</button>
+          <button class="btn sm danger" data-del-product="${p.id}">حذف محصول</button>
         </div>
       </div>
     </div>
     <div class="tiles">
       <div class="tile best"><span class="k">کمترین قیمت</span><span class="v">${sm.min != null ? `${num(sm.min)} <small>تومان</small>` : "—"}</span>
-        <span class="s">${sm.best ? `در ${esc(sname(sm.best.site_id))}` : "—"}</span></div>
+        <span class="s">${sm.best ? `در ${esc(sname(sm.best.site_id))} · ${shopLink(sm.best, "مشاهده در سایت")}` : "—"}</span></div>
       <div class="tile"><span class="k">میانگین</span><span class="v">${sm.avg != null ? `${num(sm.avg)} <small>تومان</small>` : "—"}</span>
         <span class="s">از ${nf.format(sm.ok.length)} سایت</span></div>
       <div class="tile"><span class="k">بیشترین قیمت</span><span class="v">${sm.max != null ? `${num(sm.max)} <small>تومان</small>` : "—"}</span>
@@ -290,7 +321,7 @@ function renderDetail() {
       <div class="chart-wrap" id="hchart"></div>
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>لینک‌ها</h3><button class="btn sm danger" data-del-product="${p.id}">حذف محصول</button></div>
+      <div class="panel-head"><h3>لینک‌ها</h3><span class="muted small">روی نام هر سایت بزنید تا صفحه محصول در همان سایت باز شود</span></div>
       <div class="table-wrap"><table class="grid">${offerTable(sm)}</table></div>
     </div>`;
   renderHistory();
@@ -326,12 +357,12 @@ function compareChart(sm) {
       const word = !o.enabled || !s.enabled ? "غیرفعال" : o.status === "out" ? "ناموجود" : o.status === "error" ? "خطا در خواندن" : "در انتظار بررسی";
       val = `<b>${word}</b><span>${o.price ? `آخرین قیمت: ${short(o.price)}` : "&nbsp;"}</span>`;
     }
-    return `<div class="crow ${cls}" data-tip-offer="${o.id}">
+    return `<a class="crow ${cls}" data-tip-offer="${o.id}" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">
       <span class="cs"><i class="sw2" style="background:${siteColor(o.site_id, o.product_id)}"></i><span>${esc(s.name || "?")}</span></span>
-      <span class="track">${track}</span><span class="cv">${val}</span></div>`;
+      <span class="track">${track}</span><span class="cv">${val}</span><span class="go">مشاهده ${ICON.go}</span></a>`;
   }).join("");
   const axis = sm.ok.length > 1
-    ? `<div class="cmp-axis"><span></span><span class="ax"><span>${short(sm.min)} (کمترین)</span><span>${short(sm.max)}</span></span><span></span></div>` : "";
+    ? `<div class="cmp-axis"><span></span><span class="ax"><span>${short(sm.min)} (کمترین)</span><span>${short(sm.max)}</span></span><span></span><span></span></div>` : "";
   return `<div class="cmp">${axis}${rows}</div>`;
 }
 
@@ -349,7 +380,7 @@ function offerTable(sm) {
     const diff = live(o) && sm.min != null ? (o.price === sm.min ? `<span class="badge-best">ارزان‌ترین</span>` : `<span class="diff-up">+${short(o.price - sm.min)} (${pct(((o.price - sm.min) / sm.min) * 100)})</span>`) : "—";
     const method = o.method ? `<span class="chip ${o.method === "text" ? "warn" : ""}" title="${o.method === "text" ? "قیمت از متن صفحه حدس زده شده؛ بهتر است برای این سایت CSS selector تنظیم شود" : ""}">${esc(METHOD[o.method] || o.method)}</span>` : "—";
     return `<tr class="${isBest ? "best" : ""} ${o.enabled ? "" : "off"}">
-      <td><span class="cs" style="display:inline-flex;gap:7px;align-items:center"><i class="sw2" style="width:10px;height:10px;border-radius:3px;background:${siteColor(o.site_id, o.product_id)}"></i>${esc(sname(o.site_id))}</span>
+      <td><a class="cs shop" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه محصول در ${esc(sname(o.site_id))}"><i class="sw2" style="width:10px;height:10px;border-radius:3px;background:${siteColor(o.site_id, o.product_id)}"></i>${esc(sname(o.site_id))} ${ICON.go}</a>
         <div><a class="url" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="${esc(o.url)}">${esc(o.url.replace(/^https?:\/\/(www\.)?/, ""))}</a></div></td>
       <td class="price">${o.price ? toman(o.price) : "—"}</td>
       <td>${o.old_price ? `<span class="old">${num(o.old_price)}</span>` : "—"}</td>
@@ -358,7 +389,7 @@ function offerTable(sm) {
       <td>${st}${o.status === "error" && o.error ? `<div class="small" style="color:var(--down);max-width:260px;white-space:normal">${esc(o.error)}</div>` : ""}</td>
       <td><span class="row-acts">
         <button class="btn icon" data-check-offer="${o.id}" title="بررسی همین لینک">${ICON.check}</button>
-        <a class="btn icon" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه">${ICON.open}</a>
+        <a class="btn sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه محصول در ${esc(sname(o.site_id))}">مشاهده در سایت ${ICON.go}</a>
         <button class="btn icon" data-toggle-offer="${o.id}" title="${o.enabled ? "غیرفعال کردن" : "فعال کردن"}">${o.enabled ? ICON.pause : ICON.play}</button>
         <button class="btn icon" data-del-offer="${o.id}" title="حذف لینک">${ICON.del}</button></span></td></tr>`;
   }).join("");

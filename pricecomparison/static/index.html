@@ -63,6 +63,13 @@
     <section class="bench">
       <aside class="plist">
         <input type="search" id="psearch" placeholder="جستجوی محصول…">
+        <div class="plist-tools"><span class="muted small" id="pcount"></span><button class="btn sm ghost" id="btn-pick">انتخاب و حذف چندتایی</button></div>
+        <div class="pick-bar hidden" id="pick-bar">
+          <span id="pick-n"></span><span style="flex:1"></span>
+          <button class="btn sm" id="pick-all" title="همه محصولاتی که الان در فهرست دیده می‌شوند">همه</button>
+          <button class="btn sm ghost" id="pick-none">هیچ</button>
+          <button class="btn sm danger" id="pick-del">حذف</button>
+        </div>
         <div class="pitems" id="pitems"></div>
       </aside>
       <section class="detail" id="detail"></section>

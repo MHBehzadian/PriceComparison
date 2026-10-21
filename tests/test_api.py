@@ -207,3 +207,12 @@ def test_category_import(env):
             break
         time.sleep(0.05)
     assert job["groups"][0]["product_id"] == cement.id
+
+
+def test_bulk_delete_products(env):
+    c, _, store = env
+    ids = [c.post("/api/products", json={"name": f"p{i}", "urls": [f"https://snappshop.ir/p/{i}"]}).json()["id"] for i in range(3)]
+    r = c.post("/api/products/delete", json={"ids": ids[:2] + ["nope"]}).json()
+    assert r == {"deleted": 2}
+    assert list(store.products) == [ids[2]]
+    assert [o.product_id for o in store.offers.values()] == [ids[2]]
