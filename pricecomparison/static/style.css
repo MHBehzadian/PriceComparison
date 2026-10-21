@@ -294,3 +294,28 @@ table.grid tr[data-site]:hover td { background: var(--surface2); }
   main { padding: 12px 16px 30px; }
   .stats { order: 3; flex-basis: 100%; }
 }
+
+/* ---------- category import ---------- */
+.modal-card.wide { width: min(900px, 100%); }
+.imp-bar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.imp-cat { flex: 1; min-width: 200px; }
+.imp-list { display: grid; gap: 8px; max-height: 52vh; overflow: auto; padding: 1px; }
+.ig { border: 1px solid var(--line); border-radius: 11px; background: var(--surface); padding: 9px 11px; display: grid; gap: 6px; }
+.ig.off { opacity: .5; }
+.ig-head { display: flex; align-items: center; gap: 8px; }
+.ig-name { flex: 1; min-width: 0; font-weight: 600; min-height: 32px; padding: 5px 9px; }
+.ig-name.ro { padding: 0; }
+.ig-items { display: grid; gap: 2px; padding-inline-start: 24px; }
+.ig-item { display: grid; grid-template-columns: 16px 110px minmax(0, 1fr) auto; align-items: center; gap: 8px; color: var(--text); font-size: 12.5px; padding: 4px 6px; border-radius: 7px; cursor: pointer; }
+.ig-item:hover { background: var(--surface2); }
+.ig-item.best { background: var(--best-bg); }
+.ig-item.best .ig-price { color: var(--best); font-weight: 700; }
+.ig-site { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-iname { color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-iname:hover { text-decoration: underline; }
+.ig-price { white-space: nowrap; }
+@media (max-width: 620px) {
+  .ig-items { padding-inline-start: 0; }
+  .ig-item { grid-template-columns: 16px minmax(0, 1fr) auto; }
+  .ig-site { display: none; }
+}
