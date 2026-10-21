@@ -84,12 +84,27 @@ function siteColor(id, pid) {
   return i >= 0 && i < 8 ? `var(--s${i + 1})` : "var(--muted)";
 }
 const live = (o) => o.enabled && o.status === "ok" && o.price && (site(o.site_id) || {}).enabled;
+// counted in the comparison: a price converted to the product's unit (or no
+// unit known for any shop, then prices compare as they are)
+const counted = (o) => live(o) && o.norm != null && (o.state === "ok" || o.state === "none");
+const UNIT_SRC = {
+  price: "کنار قیمت در سایت", spec: "داده ساختاریافته سایت", attr: "جدول مشخصات سایت", name: "از نام محصول",
+  default: "اندازه رایج (فرض)", manual: "تعیین‌شده توسط شما",
+};
+const perRef = (p) => (p && p.ref ? `هر ${p.ref.label}` : "");
+const sameUnit = (u, ref) => u && ref && u.dim === ref.dim && Math.abs(u.amount - ref.amount) < 1e-6;
+function unitChip(o) {
+  const u = o.unit;
+  if (!u) return `<span class="chip warn" title="واحد فروش این سایت معلوم نیست">واحد نامشخص</span>`;
+  const warn = u.assumed ? ` <span title="اندازه از روی کالاهای مشابه فرض شده؛ اگر درست نیست واحد را تعیین کنید">(فرض)</span>` : "";
+  return `<span class="chip ${u.assumed ? "warn" : u.source === "manual" ? "info" : ""}" title="${esc(UNIT_SRC[u.source] || "")}">${esc(u.label)}${warn}</span>`;
+}
 function summary(pid) {
   const all = offersOf(pid);
-  const ok = all.filter(live).sort((a, b) => a.price - b.price);
-  const prices = ok.map((o) => o.price);
+  const ok = all.filter(counted).sort((a, b) => a.norm - b.norm);
+  const prices = ok.map((o) => o.norm);
   return {
-    all, ok, best: ok[0] || null,
+    all, ok, best: ok[0] || null, ref: (product(pid) || {}).ref || null,
     min: prices.length ? prices[0] : null,
     max: prices.length ? prices[prices.length - 1] : null,
     avg: prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : null,
@@ -210,9 +225,13 @@ setInterval(() => {
 /* ---------------------------------------------------------- product list */
 let picking = false;          // product list in multi-select mode
 const picked = new Set();
+// search ignores Persian/Latin digits, Arabic letter forms and half-spaces
+const fold = (t) => String(t || "").toLowerCase()
+  .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d))
+  .replace(/ي|ى/g, "ی").replace(/ك/g, "ک").replace(/[\u200c\s]+/g, " ").trim();
 const listed = () => {
-  const q = query.trim().toLowerCase();
-  return S.products.filter((p) => !q || p.name.toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q));
+  const q = fold(query);
+  return S.products.filter((p) => !q || [p.name, p.category, ...(p.aliases || [])].some((t) => fold(t).includes(q)));
 };
 
 function renderList() {
@@ -228,7 +247,7 @@ function renderList() {
   $("#pitems").innerHTML = list.map((p) => {
     const sm = summary(p.id);
     const best = sm.best
-      ? `<b>${short(sm.min)}</b><span class="sep">·</span><span>${esc(sname(sm.best.site_id))}</span>`
+      ? `<b>${short(sm.min)}</b>${sm.ref ? `<span class="per">/ ${esc(sm.ref.label)}</span>` : ""}<span class="sep">·</span><span>${esc(sname(sm.best.site_id))}</span>`
       : `<span>${sm.all.length ? "قیمتی خوانده نشده" : "بدون لینک"}</span>`;
     return `<button class="pitem ${p.id === sel && !picking ? "on" : ""} ${picked.has(p.id) ? "picked" : ""}" data-p="${p.id}">
       <span class="pn">${picking ? `<input type="checkbox" tabindex="-1" ${picked.has(p.id) ? "checked" : ""}> ` : ""}${esc(p.name)}</span>
@@ -268,6 +287,21 @@ function select(pid) {
 }
 
 /* --------------------------------------------------------------- detail */
+function refChooser(p, sm) {
+  const unknown = sm.all.filter((o) => o.state === "unknown").length;
+  const other = sm.all.filter((o) => o.state === "other").length;
+  if (!p.ref) {
+    return `<div class="unitbar muted small">واحد فروش هیچ سایتی معلوم نیست؛ قیمت‌ها همان‌طور که سایت‌ها نوشته‌اند مقایسه می‌شوند.
+      در جدول لینک‌ها برای هر سایت «واحد» را تعیین کنید.</div>`;
+  }
+  const opts = p.ref_options.map((q) => `<option value="${q.dim}|${q.amount}|${esc(q.label)}" ${!p.ref_auto && sameUnit(q, p.ref) ? "selected" : ""}>هر ${esc(q.label)}</option>`).join("");
+  return `<div class="unitbar"><label>مقایسه قیمت‌ها بر اساس
+      <select data-ref="${p.id}"><option value="" ${p.ref_auto ? "selected" : ""}>خودکار${p.ref_auto ? `: هر ${esc(p.ref.label)}` : ""}</option>${opts}</select></label>
+    ${p.ref.assumed ? `<span class="chip warn" title="اندازه بسته از روی کالاهای مشابه فرض شده">اندازه فرضی</span>` : ""}
+    ${unknown ? `<span class="chip bad">${nf.format(unknown)} سایت واحد نامشخص دارد و در مقایسه نیست</span>` : ""}
+    ${other ? `<span class="chip warn">${nf.format(other)} سایت با واحد دیگری می‌فروشد و قابل مقایسه نیست</span>` : ""}</div>`;
+}
+
 function renderDetail() {
   const el = $("#detail");
   const p = product(sel);
@@ -291,7 +325,8 @@ function renderDetail() {
       <div class="d-top">
         <div class="grow"><h2>${esc(p.name)}</h2>
           <div class="d-sub">${p.category ? `<span class="chip">${esc(p.category)}</span>` : ""}${target}
-          <span>${nf.format(sm.all.length)} سایت</span>${p.note ? `<span>· ${esc(p.note)}</span>` : ""}</div></div>
+          <span>${nf.format(sm.all.length)} سایت</span>${p.note ? `<span>· ${esc(p.note)}</span>` : ""}</div>
+          ${refChooser(p, sm)}</div>
         <div class="btns">
           <button class="btn sm" data-check-product="${p.id}" ${working ? "disabled" : ""}>${working ? `<span class="spin"></span> در حال بررسی` : "بررسی قیمت‌ها"}</button>
           <button class="btn sm" data-add="offer">＋ لینک سایت</button>
@@ -301,21 +336,21 @@ function renderDetail() {
       </div>
     </div>
     <div class="tiles">
-      <div class="tile best"><span class="k">کمترین قیمت</span><span class="v">${sm.min != null ? `${num(sm.min)} <small>تومان</small>` : "—"}</span>
+      <div class="tile best"><span class="k">کمترین قیمت ${sm.ref ? `<small>${esc(perRef(sm))}</small>` : ""}</span><span class="v">${sm.min != null ? `${num(sm.min)} <small>تومان</small>` : "—"}</span>
         <span class="s">${sm.best ? `در ${esc(sname(sm.best.site_id))} · ${shopLink(sm.best, "مشاهده در سایت")}` : "—"}</span></div>
-      <div class="tile"><span class="k">میانگین</span><span class="v">${sm.avg != null ? `${num(sm.avg)} <small>تومان</small>` : "—"}</span>
+      <div class="tile"><span class="k">میانگین ${sm.ref ? `<small>${esc(perRef(sm))}</small>` : ""}</span><span class="v">${sm.avg != null ? `${num(sm.avg)} <small>تومان</small>` : "—"}</span>
         <span class="s">از ${nf.format(sm.ok.length)} سایت</span></div>
-      <div class="tile"><span class="k">بیشترین قیمت</span><span class="v">${sm.max != null ? `${num(sm.max)} <small>تومان</small>` : "—"}</span>
+      <div class="tile"><span class="k">بیشترین قیمت ${sm.ref ? `<small>${esc(perRef(sm))}</small>` : ""}</span><span class="v">${sm.max != null ? `${num(sm.max)} <small>تومان</small>` : "—"}</span>
         <span class="s">${sm.ok.length > 1 ? `در ${esc(sname(sm.ok[sm.ok.length - 1].site_id))}` : "—"}</span></div>
       <div class="tile"><span class="k">اختلاف ارزان‌ترین و گران‌ترین</span><span class="v">${spread ? short(spread) : "—"}</span>
         <span class="s">${spread ? `${pct((spread / sm.min) * 100)} صرفه‌جویی با خرید از ارزان‌ترین` : "—"}</span></div>
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>مقایسه قیمت فعلی در سایت‌ها</h3><span class="muted small">طول میله = چقدر گران‌تر از ارزان‌ترین</span></div>
+      <div class="panel-head"><h3>مقایسه قیمت فعلی در سایت‌ها${sm.ref ? ` <span class="per-h">${esc(perRef(sm))}</span>` : ""}</h3><span class="muted small">طول میله = چقدر گران‌تر از ارزان‌ترین</span></div>
       ${compareChart(sm)}
     </div>
     <div class="panel">
-      <div class="panel-head"><h3>روند قیمت</h3>
+      <div class="panel-head"><h3>روند قیمت${sm.ref ? ` <span class="per-h">${esc(perRef(sm))}</span>` : ""}</h3>
         <div class="seg" id="range">${RANGES.map(([k, t]) => `<button data-r="${k}" class="${k === range ? "on" : ""}">${t}</button>`).join("")}</div></div>
       <div class="legend2" id="legend"></div>
       <div class="chart-wrap" id="hchart"></div>
@@ -330,11 +365,17 @@ function renderDetail() {
 const ORDER = { ok: 0, out: 1, error: 2, pending: 3 };
 function sortedOffers(sm) {
   return [...sm.all].sort((a, b) => {
-    const la = live(a), lb = live(b);
-    if (la && lb) return a.price - b.price;
+    const la = counted(a), lb = counted(b);
+    if (la && lb) return a.norm - b.norm;
     if (la !== lb) return la ? -1 : 1;
     return (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9);
   });
+}
+
+// what a shop's own price was for, when it differs from the comparison unit
+function ownPrice(o, ref) {
+  if (!o.price || !o.unit || sameUnit(o.unit, ref)) return "";
+  return `قیمت سایت: ${toman(o.price)} برای ${esc(o.unit.label)}`;
 }
 
 function compareChart(sm) {
@@ -344,18 +385,26 @@ function compareChart(sm) {
     const s = site(o.site_id) || {};
     const isBest = sm.best && o.id === sm.best.id;
     let cls = "", track = "", val = "";
-    if (live(o)) {
-      const w = span > 0 ? ((o.price - sm.min) / span) * 100 : 0;
+    const own = ownPrice(o, sm.ref);
+    if (counted(o)) {
+      const w = span > 0 ? ((o.norm - sm.min) / span) * 100 : 0;
       cls = isBest ? "best" : "";
       track = `${w > 0 ? `<span class="bar" style="width:${w}%"></span>` : ""}<span class="pin" style="inset-inline-start:${w}%"></span>`;
-      const extra = o.price - sm.min;
-      val = `<b>${toman(o.price)}</b>` + (isBest
+      const extra = o.norm - sm.min;
+      val = `<b>${toman(o.norm)}</b>` + (isBest
         ? `<span><span class="badge-best">✓ ارزان‌ترین</span></span>`
-        : `<span>${short(extra)} گران‌تر (${pct((extra / sm.min) * 100)})</span>`);
+        : `<span>${short(extra)} گران‌تر (${pct((extra / sm.min) * 100)})</span>`) + (own ? `<span class="own">${own}</span>` : "");
+    } else if (live(o) && (o.state === "unknown" || o.state === "other")) {
+      cls = "err";
+      const why = o.state === "unknown" ? "واحد نامشخص" : "واحد متفاوت";
+      const sub = o.state === "unknown"
+        ? `${toman(o.price)} — معلوم نیست برای چه مقداری`
+        : `${toman(o.price)} برای ${esc(o.unit.label)}؛ با «${esc(sm.ref.label)}» قابل مقایسه نیست`;
+      val = `<b>${why}</b><span>${sub}</span><span><span class="linkish" role="button" data-unit-offer="${o.id}">تعیین واحد</span></span>`;
     } else {
       cls = o.status === "out" ? "out" : o.status === "error" ? "err" : "out";
       const word = !o.enabled || !s.enabled ? "غیرفعال" : o.status === "out" ? "ناموجود" : o.status === "error" ? "خطا در خواندن" : "در انتظار بررسی";
-      val = `<b>${word}</b><span>${o.price ? `آخرین قیمت: ${short(o.price)}` : "&nbsp;"}</span>`;
+      val = `<b>${word}</b><span>${o.norm ? `آخرین قیمت: ${short(o.norm)}` : "&nbsp;"}</span>`;
     }
     return `<a class="crow ${cls}" data-tip-offer="${o.id}" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer">
       <span class="cs"><i class="sw2" style="background:${siteColor(o.site_id, o.product_id)}"></i><span>${esc(s.name || "?")}</span></span>
@@ -368,7 +417,7 @@ function compareChart(sm) {
 
 function offerTable(sm) {
   if (!sm.all.length) return "";
-  const head = `<tr><th>سایت</th><th>قیمت</th><th>قبل از تخفیف</th><th>اختلاف با کمترین</th><th>روش خواندن</th><th>آخرین بررسی</th><th>وضعیت</th><th></th></tr>`;
+  const head = `<tr><th>سایت</th><th>قیمت در سایت</th><th>واحد فروش</th><th>${sm.ref ? `قیمت ${esc(perRef(sm))}` : "قیمت"}</th><th>اختلاف با کمترین</th><th>روش خواندن</th><th>آخرین بررسی</th><th>وضعیت</th><th></th></tr>`;
   return head + sortedOffers(sm).map((o) => {
     const isBest = sm.best && o.id === sm.best.id;
     const st = busy(o) ? `<span class="chip info"><span class="spin"></span> بررسی</span>`
@@ -377,13 +426,15 @@ function offerTable(sm) {
       : o.status === "out" ? `<span class="chip warn">ناموجود</span>`
       : o.status === "error" ? `<span class="chip bad" title="${esc(o.error)}">خطا</span>`
       : `<span class="chip">در انتظار</span>`;
-    const diff = live(o) && sm.min != null ? (o.price === sm.min ? `<span class="badge-best">ارزان‌ترین</span>` : `<span class="diff-up">+${short(o.price - sm.min)} (${pct(((o.price - sm.min) / sm.min) * 100)})</span>`) : "—";
+    const diff = counted(o) && sm.min != null ? (isBest ? `<span class="badge-best">ارزان‌ترین</span>` : `<span class="diff-up">+${short(o.norm - sm.min)} (${pct(((o.norm - sm.min) / sm.min) * 100)})</span>`) : "—";
+    const normCell = counted(o) ? toman(o.norm) : o.state === "unknown" ? `<span class="muted small">واحد نامشخص</span>` : o.state === "other" ? `<span class="muted small">قابل مقایسه نیست</span>` : "—";
     const method = o.method ? `<span class="chip ${o.method === "text" ? "warn" : ""}" title="${o.method === "text" ? "قیمت از متن صفحه حدس زده شده؛ بهتر است برای این سایت CSS selector تنظیم شود" : ""}">${esc(METHOD[o.method] || o.method)}</span>` : "—";
     return `<tr class="${isBest ? "best" : ""} ${o.enabled ? "" : "off"}">
       <td><a class="cs shop" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه محصول در ${esc(sname(o.site_id))}"><i class="sw2" style="width:10px;height:10px;border-radius:3px;background:${siteColor(o.site_id, o.product_id)}"></i>${esc(sname(o.site_id))} ${ICON.go}</a>
         <div><a class="url" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="${esc(o.url)}">${esc(o.url.replace(/^https?:\/\/(www\.)?/, ""))}</a></div></td>
-      <td class="price">${o.price ? toman(o.price) : "—"}</td>
-      <td>${o.old_price ? `<span class="old">${num(o.old_price)}</span>` : "—"}</td>
+      <td class="own-price">${o.price ? toman(o.price) : "—"}${o.old_price ? `<div><span class="old">${num(o.old_price)}</span></div>` : ""}</td>
+      <td><span class="unit-cell">${unitChip(o)}<button class="btn sm ghost" data-unit-offer="${o.id}" title="تعیین واحد فروش این سایت">ویرایش</button></span></td>
+      <td class="price">${normCell}</td>
       <td>${diff}</td><td>${method}</td>
       <td class="small muted" title="${o.last_check ? esc(new Date(o.last_check * 1000).toLocaleString("fa-IR")) : ""}">${ago(o.last_check)}</td>
       <td>${st}${o.status === "error" && o.error ? `<div class="small" style="color:var(--down);max-width:260px;white-space:normal">${esc(o.error)}</div>` : ""}</td>
@@ -397,10 +448,15 @@ function offerTable(sm) {
 
 /* -------------------------------------------------------- history chart */
 function seriesFor(pid) {
-  return offersOf(pid).filter((o) => o.history && o.history.length).map((o) => ({
-    o, color: siteColor(o.site_id, pid), name: sname(o.site_id),
-    pts: [...o.history].sort((a, b) => a[0] - b[0]),
-  }));
+  const ref = (product(pid) || {}).ref;
+  return offersOf(pid).filter((o) => o.history && o.history.length && (o.state === "ok" || o.state === "none")).map((o) => {
+    // the shop's unit today applies to its whole history
+    const f = ref && o.unit ? ref.amount / o.unit.amount : 1;
+    return {
+      o, color: siteColor(o.site_id, pid), name: sname(o.site_id),
+      pts: [...o.history].sort((a, b) => a[0] - b[0]).map(([t, v]) => [t, v == null ? null : Math.round(v * f)]),
+    };
+  });
 }
 function valueAt(pts, t) {
   let v = null;
@@ -520,8 +576,13 @@ $("#detail").addEventListener("mousemove", (e) => {
   if (!row) { if (!e.target.closest("#hchart")) $("#tip").classList.remove("show"); return; }
   const o = S.offers.find((x) => x.id === row.dataset.tipOffer);
   if (!o) return;
-  $("#tip").innerHTML = `<b>${esc(sname(o.site_id))}</b><br>${o.price ? toman(o.price) : "—"}` +
+  const ref = (product(o.product_id) || {}).ref;
+  $("#tip").innerHTML = `<b>${esc(sname(o.site_id))}</b>` +
+    (counted(o) && ref ? `<br>${toman(o.norm)} ${esc(perRef({ ref }))}` : "") +
+    `<br>قیمت سایت: ${o.price ? toman(o.price) : "—"}${o.unit ? ` برای ${esc(o.unit.label)}` : ""}` +
     (o.old_price ? `<br><span class="old">${toman(o.old_price)}</span>` : "") +
+    (o.unit ? `<br><span class="muted">واحد: ${esc(UNIT_SRC[o.unit.source] || "")}${o.unit.assumed ? " (فرض)" : ""}</span>` : `<br><span style="color:var(--degraded)">واحد فروش نامشخص</span>`) +
+    (o.title ? `<br><span class="muted">نام در سایت: ${esc(o.title)}</span>` : "") +
     (o.method ? `<br><span class="muted">روش: ${esc(METHOD[o.method] || o.method)}</span>` : "") +
     `<br><span class="muted">آخرین بررسی: ${ago(o.last_check)}</span>` +
     (o.error ? `<br><span style="color:var(--down)">${esc(o.error)}</span>` : "");
@@ -598,6 +659,8 @@ async function runTest(f, body) {
     out.className = "test-out ok";
     out.innerHTML = r.available
       ? `قیمت: <b>${toman(r.price)}</b>${r.old_price ? ` · قبل از تخفیف: <span class="old">${num(r.old_price)}</span>` : ""}<br><span class="muted">روش: ${esc(METHOD[r.method] || r.method)}</span>` +
+        `<br>واحد فروش: ${r.unit ? `<b>${esc(r.unit.label)}</b> <span class="muted">(${esc(UNIT_SRC[r.unit.source] || "")}${r.unit.assumed ? "، فرضی" : ""})</span>` : `<span style="color:var(--degraded)">پیدا نشد</span>`}` +
+        (r.title ? `<br><span class="muted">نام کالا: ${esc(r.title)}</span>` : "") +
         (r.guess ? `<br><span style="color:var(--degraded)">این قیمت از متن صفحه حدس زده شده؛ اگر درست نیست برای سایت CSS selector بگذارید.</span>` : "")
       : `صفحه خوانده شد: محصول <b>ناموجود</b> است <span class="muted">(${esc(METHOD[r.method] || r.method)})</span>`;
   } catch (e) { out.className = "test-out bad"; out.textContent = e.message; }
@@ -811,19 +874,24 @@ function renderImportBody(job, f) {
 
 function importGroup(g, i) {
   const st = imp.sel.get(i);
-  const priced = g.items.filter((x) => x.price && st.urls.has(x.url));
-  const min = priced.length > 1 ? Math.min(...priced.map((x) => x.price)) : null;
+  const priced = g.items.filter((x) => x.norm && st.urls.has(x.url));
+  const min = priced.length > 1 ? Math.min(...priced.map((x) => x.norm)) : null;
+  const ref = g.ref;
   return `<div class="ig ${st.on ? "" : "off"}">
     <div class="ig-head"><input type="checkbox" data-imp-g="${i}" ${st.on ? "checked" : ""} aria-label="انتخاب">
       ${g.product_id ? `<span class="ig-name ro">${esc(g.name)}</span><span class="chip info">محصول موجود</span>`
         : `<input class="ig-name" data-imp-name="${i}" value="${esc(st.name)}" maxlength="120">`}
-      <span class="chip ${g.items.length > 1 ? "good" : ""}">${nf.format(g.items.length)} سایت</span></div>
+      <span class="chip ${g.items.length > 1 ? "good" : ""}">${nf.format(g.items.length)} سایت</span>
+      ${ref && g.items.length > 1 ? `<span class="chip" title="قیمت‌ها برای مقایسه به این واحد تبدیل شده‌اند">مقایسه هر ${esc(ref.label)}</span>` : ""}</div>
     <div class="ig-items">${g.items.map((x) => {
-      const best = min != null && x.price === min;
+      const best = min != null && x.norm === min;
+      const conv = ref && x.qty && x.price && !sameUnit(x.qty, ref) && x.norm ? `<span class="muted small">≈ ${toman(x.norm)} هر ${esc(ref.label)}</span>` : "";
+      const unit = x.qty ? `<span class="chip ${x.qty.assumed ? "warn" : ""}" title="${esc(UNIT_SRC[x.qty.source] || "")}">${esc(x.qty.label)}</span>`
+        : `<span class="chip warn">واحد نامشخص</span>`;
       return `<label class="ig-item ${best ? "best" : ""}"><input type="checkbox" data-imp-i="${i}" value="${esc(x.url)}" ${st.urls.has(x.url) ? "checked" : ""}>
         <span class="ig-site">${esc(sname(x.site_id))}</span>
         <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer" class="ig-iname">${esc(x.name)}</a>
-        <span class="ig-price">${x.price ? toman(x.price) : "—"}${best ? ` <span class="badge-best">ارزان‌ترین</span>` : ""}</span></label>`;
+        <span class="ig-price">${x.price ? toman(x.price) : "—"} / ${unit}${best ? ` <span class="badge-best">ارزان‌ترین</span>` : ""}${conv ? `<br>${conv}` : ""}</span></label>`;
     }).join("")}</div></div>`;
 }
 
@@ -866,6 +934,53 @@ async function applyImport() {
   } catch (_) { btn.disabled = false; }
 }
 
+/* ------------------------------------------------------------------ units */
+const UNIT_EXAMPLES = ["کیلوگرم", "تن", "کیسه ۵۰ کیلویی", "کیسه ۴۰ کیلویی", "شاخه ۱۲ متری", "عدد", "متر", "متر مربع", "متر مکعب", "لیتر", "بسته ۱۰ عددی"];
+
+function unitForm(o) {
+  if (!o) return;
+  const auto = o.qty;
+  openModal(`<h2>واحد فروش در ${esc(sname(o.site_id))}</h2>
+    <p class="note">قیمت این سایت <b>${o.price ? toman(o.price) : "—"}</b> است. این قیمت برای چه مقداری از کالاست؟
+      ${o.title ? `<br><span class="muted">نام کالا در سایت: ${esc(o.title)}</span>` : ""}</p>
+    <div class="box"><span class="small muted">تشخیص خودکار</span>
+      <div>${auto ? `<b>${esc(auto.label)}</b> <span class="muted small">— ${esc(UNIT_SRC[auto.source] || "")}${auto.assumed ? "، اندازه فرضی" : ""}</span>` : `<span style="color:var(--degraded)">واحدی در صفحه این سایت پیدا نشد</span>`}</div></div>
+    <label>واحد (اگر تشخیص خودکار درست نیست)<input name="unit" value="${esc(o.qty_manual ? o.qty_manual.label : "")}" placeholder="مثلا: کیسه ۵۰ کیلویی، هر تن، شاخه ۱۲ متری، عدد"></label>
+    <div class="btns">${UNIT_EXAMPLES.map((x) => `<button type="button" class="btn sm ghost" data-unit-ex="${x}">${x}</button>`).join("")}</div>
+    <div class="test-out muted" id="unit-preview">${o.qty_manual ? "" : "خالی بماند = تشخیص خودکار"}</div>
+    ${actions("ذخیره", o.qty_manual ? `<button type="button" class="btn" id="unit-auto">برگشت به تشخیص خودکار</button>` : "")}`,
+  async (fd) => {
+    await act(() => api("PUT", `/api/offers/${o.id}/unit`, { text: (fd.get("unit") || "").trim() }), "واحد ذخیره شد");
+  });
+  const input = $("#modal-form [name=unit]"), out = $("#unit-preview");
+  let tm;
+  const preview = () => {
+    clearTimeout(tm);
+    tm = setTimeout(async () => {
+      const text = input.value.trim();
+      if (!text) { out.className = "test-out muted"; out.textContent = "خالی بماند = تشخیص خودکار"; return; }
+      const r = await api("POST", `/api/units/parse?offer_id=${o.id}`, { text }).catch(() => ({}));
+      const u = r.unit;
+      const ref = (product(o.product_id) || {}).ref;
+      if (!u) { out.className = "test-out bad"; out.textContent = "این واحد را نشناختم"; return; }
+      const conv = ref && o.price && u.dim === ref.dim && !sameUnit(u, ref) ? `<br>یعنی ${toman(Math.round(o.price / u.amount * ref.amount))} برای هر ${esc(ref.label)}` : ref && u.dim !== ref.dim ? `<br><span style="color:var(--degraded)">با واحد مقایسه این محصول (${esc(ref.label)}) قابل مقایسه نیست</span>` : "";
+      out.className = "test-out ok";
+      out.innerHTML = `${toman(o.price)} برای <b>${esc(u.label)}</b>${conv}`;
+    }, 250);
+  };
+  input.oninput = preview;
+  if (input.value) preview();
+  const back = $("#unit-auto");
+  if (back) back.onclick = async () => { await act(() => api("PUT", `/api/offers/${o.id}/unit`, { text: "" }), "به تشخیص خودکار برگشت"); closeModal(); };
+}
+
+document.addEventListener("change", (e) => {
+  const sel = e.target.closest("[data-ref]");
+  if (!sel) return;
+  const [dim, amount, label] = sel.value ? sel.value.split("|") : ["", "1", ""];
+  act(() => api("PUT", `/api/products/${sel.dataset.ref}/ref`, { dim, amount: +amount, label }));
+});
+
 /* --------------------------------------------------------------- actions */
 function addThing(kind) {
   $("#add-pop").classList.remove("open");
@@ -877,9 +992,11 @@ function addThing(kind) {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest(".menu")) $("#add-pop").classList.remove("open");
-  const t = e.target.closest("[data-add],[data-close-modal],[data-check-product],[data-check-offer],[data-toggle-offer],[data-del-offer],[data-edit-product],[data-del-product],[data-del-site],[data-r],[data-lg]");
+  const t = e.target.closest("[data-add],[data-close-modal],[data-check-product],[data-check-offer],[data-toggle-offer],[data-del-offer],[data-edit-product],[data-del-product],[data-del-site],[data-r],[data-lg],[data-unit-offer],[data-unit-ex]");
   if (!t) return;
   const d = t.dataset;
+  if (d.unitOffer) { e.preventDefault(); return unitForm(S.offers.find((o) => o.id === d.unitOffer)); }
+  if (d.unitEx) { const i = $("#modal-form [name=unit]"); i.value = d.unitEx; i.dispatchEvent(new Event("input")); return; }
   if (d.add) return addThing(d.add);
   if ("closeModal" in d) return closeModal();
   if (d.r) {

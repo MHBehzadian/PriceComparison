@@ -214,9 +214,9 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 
 /* gap-from-cheapest chart */
 .cmp { display: grid; gap: 4px; }
-.cmp-axis { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px 64px; gap: 12px; font-size: 11px; color: var(--faint); padding: 0 10px; }
+.cmp-axis { display: grid; grid-template-columns: 130px minmax(0, 1fr) 210px 64px; gap: 12px; font-size: 11px; color: var(--faint); padding: 0 10px; }
 .cmp-axis .ax { display: flex; justify-content: space-between; }
-.crow { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px 64px; color: var(--text); text-decoration: none; cursor: pointer; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: default; }
+.crow { display: grid; grid-template-columns: 130px minmax(0, 1fr) 210px 64px; color: var(--text); text-decoration: none; cursor: pointer; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: default; }
 .crow:hover { background: var(--surface2); }
 .crow .go { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--muted); white-space: nowrap; justify-self: end; }
 .crow:hover .go { color: var(--accent); }
@@ -240,7 +240,7 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 .crow.out .cv b, .crow.err .cv b { color: var(--faint); font-weight: 500; }
 .badge-best, .crow .cv .badge-best { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--best); color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
 @media (max-width: 620px) {
-  .crow, .cmp-axis { grid-template-columns: 92px minmax(0, 1fr) 108px 18px; gap: 8px; padding-inline: 6px; }
+  .crow, .cmp-axis { grid-template-columns: 84px minmax(0, 1fr) 140px 18px; gap: 8px; padding-inline: 6px; }
   .crow .go { font-size: 0; }
   .crow .cv b { font-size: 12.5px; } .crow.best .cv b { font-size: 13.5px; }
   .cmp-axis { display: none; }
@@ -337,3 +337,19 @@ td a.cs.shop svg { color: var(--accent); }
 .pitems.picking .pitem { cursor: default; }
 .pitem .pn input { vertical-align: -3px; margin-inline-end: 4px; pointer-events: none; }
 .pitem.picked { border-color: var(--down); box-shadow: inset 0 0 0 1px var(--down); }
+
+/* ---------- sale units ---------- */
+.unitbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 12.5px; }
+.unitbar label { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; color: var(--muted); }
+.unitbar select { min-height: 30px; padding: 3px 8px; font-weight: 600; color: var(--text); }
+.per { color: var(--muted); font-size: 11px; }
+.per-h { font-size: 12px; font-weight: 500; color: var(--muted); }
+.tile .k small { color: var(--faint); font-size: 11px; }
+.crow .cv .own { font-size: 11px; color: var(--faint); white-space: normal; line-height: 1.6; }
+.crow.err .cv span, .crow.out .cv span { white-space: normal; line-height: 1.6; }
+.linkish { color: var(--accent); cursor: pointer; font-size: 11.5px; }
+.linkish:hover { text-decoration: underline; }
+.unit-cell { display: inline-flex; align-items: center; gap: 4px; }
+.unit-cell .btn { height: 24px; padding: 0 7px; font-size: 11.5px; }
+td.own-price { white-space: nowrap; color: var(--muted); }
+.ig-price { text-align: end; line-height: 1.7; }

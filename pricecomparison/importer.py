@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Awaitable, Callable
 
+from . import units
 from .catalog import Candidate, Group, group_items, guess_next, parse_listing
 from .extract import ExtractError
 from .models import O_OK, Offer, Product, Site, new_id
@@ -109,7 +110,8 @@ class Importer:
             new = [it for it in listing.items if it.url not in seen_items]
             for it in new:
                 seen_items.add(it.url)
-                out.append(Candidate(name=it.name, url=it.url, site_id=site.id, price=it.price))
+                q = units.resolve(it.name, it.near)
+                out.append(Candidate(name=it.name, url=it.url, site_id=site.id, price=it.price, qty=q.to_dict() if q else None))
             src.found = len(seen_items)
             await self._send(job)
             if not new:
@@ -166,7 +168,7 @@ class Importer:
             for c in keep:
                 if c.name not in p.aliases and c.name != p.name:
                     p.aliases.append(c.name)
-                o = Offer(product_id=p.id, site_id=c.site_id, url=c.url)
+                o = Offer(product_id=p.id, site_id=c.site_id, url=c.url, title=c.name, qty=c.qty)
                 if c.price:
                     # the listing already shows a price: chart it right away;
                     # the next scheduled check reads the product page itself

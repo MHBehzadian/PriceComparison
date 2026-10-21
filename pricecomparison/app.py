@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from . import __version__
 from .auth import COOKIE, SESSION_TTL, Auth
+from . import units
 from .extract import ExtractError
 from .importer import Importer
 from .models import UNITS, Offer, Product, Site
@@ -116,6 +117,16 @@ class TestIn(BaseModel):
     @classmethod
     def _u(cls, v):
         return _url(v)
+
+
+class UnitIn(BaseModel):
+    text: str = Field("", max_length=80)  # "کیسه ۵۰ کیلویی", "هر تن"; empty = read it from the shop again
+
+
+class RefIn(BaseModel):
+    dim: str = ""  # empty = choose automatically
+    amount: float = Field(1, gt=0)
+    label: str = Field("", max_length=60)
 
 
 class ImportIn(BaseModel):
@@ -355,7 +366,8 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             r = await fetcher.read(body.url, probe, store.settings)
         except (ExtractError, FetchError) as e:
             return {"ok": False, "error": str(e)}
-        return {"ok": True, "price": r.price, "old_price": r.old_price, "available": r.available, "method": r.method, "guess": r.guess}
+        return {"ok": True, "price": r.price, "old_price": r.old_price, "available": r.available, "method": r.method, "guess": r.guess,
+                "title": r.title, "unit": r.qty}
 
     # ---- products ----------------------------------------------------
     async def add_offer(product: Product, url: str, site_id: str = "", create_site: bool = False) -> Offer:
@@ -455,6 +467,39 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
     async def del_offer(oid: str):
         if store.offers.pop(oid, None) is None:
             raise HTTPException(404, "not found")
+        await mon.changed()
+        return {"ok": True}
+
+    @app.post("/api/units/parse", dependencies=A)
+    async def parse_unit(body: UnitIn, offer_id: str = ""):
+        o = store.offers.get(offer_id)
+        p = store.products.get(o.product_id) if o else None
+        q = units.parse_input(body.text, (o.title if o else "") or (p.name if p else ""))
+        return {"unit": q.to_dict() if q else None}
+
+    @app.put("/api/offers/{oid}/unit", dependencies=A)
+    async def set_offer_unit(oid: str, body: UnitIn):
+        o = get(store.offers, oid)
+        if not body.text.strip():
+            o.qty_manual = None
+        else:
+            p = store.products.get(o.product_id)
+            q = units.parse_input(body.text, o.title or (p.name if p else ""))
+            if q is None:
+                raise HTTPException(422, "واحد را نشناختم؛ مثلا بنویسید «کیسه ۵۰ کیلویی»، «هر تن»، «شاخه ۱۲ متری» یا «عدد»")
+            o.qty_manual = q.to_dict()
+        await mon.changed()
+        return {"unit": o.qty_manual or o.qty}
+
+    @app.put("/api/products/{pid}/ref", dependencies=A)
+    async def set_product_ref(pid: str, body: RefIn):
+        p = get(store.products, pid)
+        if not body.dim:
+            p.ref_unit = None
+        else:
+            if body.dim not in units.BASE_FA:
+                raise HTTPException(422, "unknown unit")
+            p.ref_unit = units.Qty(body.dim, body.amount, body.label or units.label_of(body.dim, body.amount), units.MANUAL).to_dict()
         await mon.changed()
         return {"ok": True}
 

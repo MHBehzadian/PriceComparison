@@ -24,6 +24,7 @@ from typing import Any, Iterator
 
 from bs4 import BeautifulSoup
 
+from . import units
 from .models import AUTO, RIAL, TOMAN
 
 MIN_TOMAN = 1_000  # anything lower is a percentage, a count or a rating
@@ -52,6 +53,9 @@ class Found:
     unit: str | None = None  # what the page itself says, if anything
     available: bool = True
     old: float | None = None
+    near: str = ""  # the text around the price on the page, where shops write "/ کیلوگرم"
+    spec: units.Qty | None = None  # unit from structured data (schema.org unitCode)
+    title: str = ""
 
 
 @dataclass
@@ -61,6 +65,8 @@ class Result:
     available: bool = True
     old_price: int | None = None
     guess: bool = False  # found by the "text" reader: worth setting a selector
+    title: str = ""  # the product's name on the shop
+    qty: dict | None = None  # the quantity the price is for (units.Qty), when the page says
 
 
 # ---------------------------------------------------------------- numbers
@@ -143,7 +149,8 @@ def read_selector(soup: BeautifulSoup, selector: str, out_selector: str = "") ->
     if el is None:
         return None
     text = el.get("content") or el.get("data-price") or el.get_text(" ", strip=True)
-    return Found(parse_price_text(str(text)), "selector", unit_in(el.get_text(" ", strip=True)))
+    near = (el.parent or el).get_text(" ", strip=True)[:300]
+    return Found(parse_price_text(str(text)), "selector", unit_in(el.get_text(" ", strip=True)), near=near)
 
 
 def _walk(node: Any) -> Iterator[dict]:
@@ -170,6 +177,18 @@ def _ld_offers(offers: Any) -> list[dict]:
     return []
 
 
+def _ld_unit(offer: dict, spec: dict) -> units.Qty | None:
+    """unitCode / unitText / referenceQuantity of an Offer's priceSpecification."""
+    ref = spec.get("referenceQuantity") or offer.get("referenceQuantity") or {}
+    ref = ref if isinstance(ref, dict) else {}
+    code = spec.get("unitCode") or ref.get("unitCode") or offer.get("unitCode")
+    q = units.from_code(code, ref.get("value"))
+    text = spec.get("unitText") or ref.get("unitText") or offer.get("unitText")
+    if q is None and isinstance(text, str) and text.strip():
+        q = units.parse_per("هر " + text, "", units.SPEC)
+    return q
+
+
 def read_jsonld(soup: BeautifulSoup) -> Found | None:
     for tag in soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)}):
         try:
@@ -192,10 +211,11 @@ def read_jsonld(soup: BeautifulSoup) -> Found | None:
                 if v:
                     unit = currency_unit(o.get("priceCurrency") or spec.get("priceCurrency"))
                     old = parse_number(o.get("highPrice")) if o.get("lowPrice") else None
-                    prices.append((v, unit, old))
+                    prices.append((v, unit, old, _ld_unit(o, spec)))
             if prices:
-                v, unit, old = min(prices, key=lambda p: p[0])
-                return Found(v, "jsonld", unit, old=old if old and old > v else None)
+                v, unit, old, qty = min(prices, key=lambda p: p[0])
+                name = node.get("name") if isinstance(node.get("name"), str) else ""
+                return Found(v, "jsonld", unit, old=old if old and old > v else None, spec=qty, title=name)
             if out_seen:
                 return Found(None, "jsonld", available=False)
     return None
@@ -233,7 +253,8 @@ def read_microdata(soup: BeautifulSoup) -> Found | None:
         return None
     cur = scope.find(attrs={"itemprop": "priceCurrency"})
     unit = currency_unit(cur.get("content") or cur.get_text(strip=True)) if cur else None
-    return Found(v, "microdata", unit or unit_in(el.get_text(" ", strip=True)))
+    near = (el.parent or el).get_text(" ", strip=True)[:300]
+    return Found(v, "microdata", unit or unit_in(el.get_text(" ", strip=True)), near=near)
 
 
 def read_woo(soup: BeautifulSoup) -> Found | None:
@@ -253,7 +274,10 @@ def read_woo(soup: BeautifulSoup) -> Found | None:
     unit = unit_in(sym.get_text() if sym else amount.get_text())
     v = parse_price_text(amount.get_text(" ", strip=True))
     old = parse_price_text(old_el.get_text(" ", strip=True)) if old_el else None
-    return Found(v, "woo", unit, old=old) if v else None
+    near = " ".join([box.get_text(" ", strip=True)] + [
+        sib.get_text(" ", strip=True) if hasattr(sib, "get_text") else str(sib) for sib in list(box.next_siblings)[:3]
+    ])[:300]
+    return Found(v, "woo", unit, old=old, near=near) if v else None
 
 
 def read_nextdata(soup: BeautifulSoup) -> Found | None:
@@ -289,7 +313,9 @@ def read_text(soup: BeautifulSoup) -> Found | None:
         if m:
             v = parse_price_text(m.group(1))
             if v:
-                return Found(v, "text", RIAL if m.group(2) == "ریال" else TOMAN)
+                tail = " ".join(to_digits(str(x)) for x in texts[i + 1:i + 4])
+                near = (buf[max(0, m.start() - 60):] + " " + tail)[:300]
+                return Found(v, "text", RIAL if m.group(2) == "ریال" else TOMAN, near=near)
             buf = buf[m.end():]
     return None
 
@@ -301,6 +327,54 @@ def page_says_out_of_stock(soup: BeautifulSoup) -> bool:
 
 
 GENERIC = (read_jsonld, read_meta, read_microdata, read_woo, read_nextdata)
+
+
+def near_price(soup: BeautifulSoup, value: float) -> str:
+    """The text around where the page shows this price, for readers that
+    took it from data rather than from the visible page."""
+    want = {int(value), int(value) // 10, int(value) * 10}
+    for s in soup.find_all(string=True):
+        if s.parent is None or s.parent.name in ("script", "style", "del", "s", "strike", "title"):
+            continue
+        if want & set(numbers_in(str(s))):
+            block = s.parent
+            for _ in range(2):
+                if block.parent is not None and len(block.parent.get_text(" ", strip=True)) < 160:
+                    block = block.parent
+            return block.get_text(" ", strip=True)[:300]
+    return ""
+
+
+_ATTR_LINE = re.compile(r"(واحد(?: فروش| اندازه ?گیری)?|وزن|حجم|بسته ?بندی)\s*[:：]\s*([^\n|،,؛]{1,30})")
+
+
+def page_attrs(soup: BeautifulSoup) -> dict[str, str]:
+    """The product's specs table: WooCommerce attributes, any two-cell
+    rows, definition lists and "واحد: کیلوگرم" lines."""
+    out: dict[str, str] = {}
+    for tr in soup.select("table.shop_attributes tr, .woocommerce-product-attributes tr, table tr")[:80]:
+        cells = tr.find_all(["th", "td"])
+        if len(cells) == 2:
+            k, v = cells[0].get_text(" ", strip=True), cells[1].get_text(" ", strip=True)
+            if 0 < len(k) <= 40 and 0 < len(v) <= 80:
+                out.setdefault(k, v)
+    for dt in soup.find_all("dt")[:40]:
+        dd = dt.find_next_sibling("dd")
+        if dd:
+            out.setdefault(dt.get_text(" ", strip=True)[:40], dd.get_text(" ", strip=True)[:80])
+    main = soup.find("main") or soup.body or soup
+    for m in _ATTR_LINE.finditer(to_digits(main.get_text("\n", strip=True))[:20000]):
+        out.setdefault(m.group(1), m.group(2).strip())
+    return out
+
+
+def page_title(soup: BeautifulSoup, found: Found) -> str:
+    h1 = soup.find("h1")
+    og = soup.find("meta", attrs={"property": "og:title"})
+    for t in (found.title, h1.get_text(" ", strip=True) if h1 else "", og.get("content", "") if og else ""):
+        if t and t.strip():
+            return re.sub(r"\s+", " ", t).strip()[:200]
+    return ""
 
 
 def extract(html: str, site_unit: str = AUTO, selector: str = "", out_selector: str = "") -> Result:
@@ -321,9 +395,13 @@ def extract(html: str, site_unit: str = AUTO, selector: str = "", out_selector: 
     if found is None:
         raise ExtractError("قیمتی در صفحه پیدا نشد؛ برای این سایت یک CSS selector تنظیم کنید")
     if not found.available or found.value is None:
-        return Result(None, found.method, available=False)
+        return Result(None, found.method, available=False, title=page_title(soup, found))
     price = to_toman(found.value, found.unit, site_unit)
     if not MIN_TOMAN <= price <= MAX_TOMAN:
         raise ExtractError(f"عدد خوانده‌شده ({price:,}) قیمت معقولی نیست")
     old = to_toman(found.old, found.unit, site_unit) if found.old else None
-    return Result(price, found.method, True, old if old and old > price else None, guess=found.method == "text")
+    title = page_title(soup, found)
+    near = found.near or near_price(soup, found.value)
+    qty = units.resolve(title, near, page_attrs(soup), found.spec)
+    return Result(price, found.method, True, old if old and old > price else None, guess=found.method == "text",
+                  title=title, qty=qty.to_dict() if qty else None)
