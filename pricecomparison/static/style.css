@@ -182,7 +182,7 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 /* ---------- workbench: product list + detail ---------- */
 .bench { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
 @media (max-width: 960px) { .bench { grid-template-columns: minmax(0, 1fr); } }
-.plist { position: sticky; top: 70px; display: grid; gap: 10px; max-height: calc(100vh - 90px); grid-template-rows: auto minmax(0, 1fr); }
+.plist { position: sticky; top: 70px; display: grid; gap: 8px; max-height: calc(100vh - 90px); grid-template-rows: auto auto auto minmax(0, 1fr); }
 @media (max-width: 960px) { .plist { position: static; max-height: none; } }
 .plist input[type=search] { width: 100%; }
 .pitems { display: grid; gap: 6px; overflow: auto; align-content: start; padding: 1px; }
@@ -214,10 +214,13 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 
 /* gap-from-cheapest chart */
 .cmp { display: grid; gap: 4px; }
-.cmp-axis { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px; gap: 12px; font-size: 11px; color: var(--faint); padding: 0 10px; }
+.cmp-axis { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px 64px; gap: 12px; font-size: 11px; color: var(--faint); padding: 0 10px; }
 .cmp-axis .ax { display: flex; justify-content: space-between; }
-.crow { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: default; }
+.crow { display: grid; grid-template-columns: 130px minmax(0, 1fr) 150px 64px; color: var(--text); text-decoration: none; cursor: pointer; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid transparent; cursor: default; }
 .crow:hover { background: var(--surface2); }
+.crow .go { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--muted); white-space: nowrap; justify-self: end; }
+.crow:hover .go { color: var(--accent); }
+.crow:hover .cs span { text-decoration: underline; }
 .crow .cs { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13px; }
 .crow .cs span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .crow .sw2 { width: 10px; height: 10px; border-radius: 3px; flex: none; }
@@ -237,7 +240,8 @@ legend { color: var(--muted); font-size: 12px; padding: 0 6px; }
 .crow.out .cv b, .crow.err .cv b { color: var(--faint); font-weight: 500; }
 .badge-best, .crow .cv .badge-best { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--best); color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
 @media (max-width: 620px) {
-  .crow, .cmp-axis { grid-template-columns: 92px minmax(0, 1fr) 108px; gap: 8px; padding-inline: 6px; }
+  .crow, .cmp-axis { grid-template-columns: 92px minmax(0, 1fr) 108px 18px; gap: 8px; padding-inline: 6px; }
+  .crow .go { font-size: 0; }
   .crow .cv b { font-size: 12.5px; } .crow.best .cv b { font-size: 13.5px; }
   .cmp-axis { display: none; }
 }
@@ -319,3 +323,17 @@ table.grid tr[data-site]:hover td { background: var(--surface2); }
   .ig-item { grid-template-columns: 16px minmax(0, 1fr) auto; }
   .ig-site { display: none; }
 }
+
+/* links to the shop's own product page */
+a.shop { color: var(--accent); text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+a.shop:hover { text-decoration: underline; }
+td a.cs.shop { color: var(--text); font-weight: 500; gap: 7px; }
+td a.cs.shop svg { color: var(--accent); }
+.tile .s a.shop { font-size: 12px; }
+
+/* product list multi-select */
+.plist-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pick-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--down) 40%, var(--line)); border-radius: 10px; background: var(--surface); font-size: 12.5px; }
+.pitems.picking .pitem { cursor: default; }
+.pitem .pn input { vertical-align: -3px; margin-inline-end: 4px; pointer-events: none; }
+.pitem.picked { border-color: var(--down); box-shadow: inset 0 0 0 1px var(--down); }

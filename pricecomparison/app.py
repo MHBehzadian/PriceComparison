@@ -151,6 +151,10 @@ class SettingsIn(BaseModel):
     user_agent: str = Field(min_length=10, max_length=400)
 
 
+class IdsIn(BaseModel):
+    ids: list[str] = Field(max_length=5000)
+
+
 class LoginIn(BaseModel):
     username: str
     password: str
@@ -403,6 +407,19 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.emit("warning", "product", f"محصول «{p.name}» حذف شد")
         await mon.changed()
         return {"ok": True}
+
+    @app.post("/api/products/delete", dependencies=A)
+    async def del_products(body: IdsIn):
+        gone = [store.products.pop(pid) for pid in body.ids if pid in store.products]
+        ids = {p.id for p in gone}
+        for o in [o for o in store.offers.values() if o.product_id in ids]:
+            store.offers.pop(o.id, None)
+        for pid in ids:
+            store.meta.get("cheapest", {}).pop(pid, None)
+        if gone:
+            await mon.emit("warning", "product", f"{len(gone)} محصول حذف شد")
+        await mon.changed()
+        return {"deleted": len(gone)}
 
     @app.post("/api/products/{pid}/check", dependencies=A)
     async def check_product(pid: str):
