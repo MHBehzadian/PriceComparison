@@ -13,6 +13,7 @@ class FakeShops:
     def __init__(self):
         self.prices: dict[str, int | None] = {}
         self.calls: list[str] = []
+        self.pages: dict[str, str] = {}
 
     async def read(self, url, site, settings):
         self.calls.append(url)
@@ -20,6 +21,14 @@ class FakeShops:
             raise ExtractError("قیمتی در صفحه پیدا نشد")
         p = self.prices[url]
         return Result(p, "jsonld", available=p is not None)
+
+    async def page(self, url, settings):
+        self.calls.append(url)
+        if url not in self.pages:
+            from pricecomparison.scraper import FetchError
+
+            raise FetchError("HTTP 404")
+        return self.pages[url]
 
     async def close(self):
         pass
@@ -140,3 +149,61 @@ async def test_digikala_out_of_stock():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         r = await digikala(client, "https://www.digikala.com/product/dkp-1/")
     assert r.available is False
+
+
+def woo(items, next_href=""):
+    lis = "".join(
+        f'<li class="product"><a href="{u}"><h2 class="woocommerce-loop-product__title">{n}</h2>'
+        f'<span class="price"><span class="amount">{p} تومان</span></span></a></li>' for u, n, p in items
+    )
+    nxt = f'<a class="next page-numbers" href="{next_href}">بعدی</a>' if next_href else ""
+    return f'<h1>مصالح ساختمانی</h1><ul class="products">{lis}</ul>{nxt}'
+
+
+def test_category_import(env):
+    c, shops, store = env
+    a1 = "https://masaleh-tehran.ir/product-category/building-materials/"
+    shops.pages[a1] = woo([("https://masaleh-tehran.ir/product/c2/", "سیمان پاکتی تیپ ۲ تهران", "185,000")], a1 + "page/2/")
+    shops.pages[a1 + "page/2/"] = woo([("https://masaleh-tehran.ir/product/r12/", "میلگرد ۱۲ ذوب آهن", "1,150,000")])
+    b1 = "https://shahrsakhtemani.com/shop/"
+    # no next link: page 2 is guessed, page 3 does not exist
+    shops.pages[b1] = woo([("https://shahrsakhtemani.com/product/cement/", "خرید سیمان تیپ 2 تهران 50 کیلویی", "180,000")])
+    shops.pages[b1 + "page/2/"] = woo([("https://shahrsakhtemani.com/product/gypsum/", "گچ سفید سمنان", "95,000")])
+    bad = "https://emalls.ir/x~Category~70445"
+
+    job = c.post("/api/import", json={"urls": [a1, b1, bad], "max_pages": 10}).json()
+    import time
+
+    for _ in range(50):
+        job = c.get(f"/api/import/{job['id']}").json()
+        if job["status"] == "done":
+            break
+        time.sleep(0.05)
+    src = {s["url"]: s for s in job["sources"]}
+    assert (src[a1]["pages"], src[a1]["found"]) == (2, 2)
+    assert (src[b1]["pages"], src[b1]["found"]) == (2, 2)
+    assert src[bad]["status"] == "error"
+    assert any(s.domains == ["masaleh-tehran.ir"] for s in store.sites.values())  # new shop added as a site
+    groups = job["groups"]
+    assert len(groups) == 3 and len(groups[0]["items"]) == 2  # the cement is on both shops
+    assert c.get("/api/state").json()["import"]["status"] == "done"
+
+    picks = [{"index": i, "name": g["name"], "urls": [x["url"] for x in g["items"]]} for i, g in enumerate(groups) if i != 2]
+    picks[0]["name"] = "سیمان تیپ ۲ تهران"
+    r = c.post(f"/api/import/{job['id']}/apply", json={"category": "مصالح", "groups": picks}).json()
+    assert r == {"created": 2, "linked": 3}
+    cement = next(p for p in store.products.values() if p.name == "سیمان تیپ ۲ تهران")
+    assert cement.category == "مصالح" and len(cement.aliases) == 2
+    best = store.cheapest(cement.id)
+    assert best.price == 180_000 and best.method == "listing"
+    assert c.post(f"/api/import/{job['id']}/apply", json={"groups": picks}).status_code == 409
+
+    # a second import matches the existing product instead of making a new one
+    shops.pages[bad] = '<a href="/m~id~5">سیمان تیپ 2 تهران پاکتی</a><span>۱۷۹٬۰۰۰ تومان</span>'
+    job = c.post("/api/import", json={"urls": [bad], "max_pages": 1}).json()
+    for _ in range(50):
+        job = c.get(f"/api/import/{job['id']}").json()
+        if job["status"] == "done":
+            break
+        time.sleep(0.05)
+    assert job["groups"][0]["product_id"] == cement.id

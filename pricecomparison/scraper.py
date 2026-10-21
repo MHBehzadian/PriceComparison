@@ -22,6 +22,8 @@ from .store import host_of
 class Fetcher(Protocol):
     async def read(self, url: str, site: Site, settings: Settings) -> Result: ...
 
+    async def page(self, url: str, settings: Settings) -> str: ...
+
     async def close(self) -> None: ...
 
 
@@ -103,18 +105,28 @@ class HTTPFetcher:
         return lock
 
     async def read(self, url: str, site: Site, settings: Settings) -> Result:
-        host = host_of(url)
-        lock = await self._polite(host, settings.host_delay_s)
-        try:
-            client = self.client(settings)
-            fn = adapter_for(url)
-            if fn and not site.selector:
-                return await fn(client, url)
+        fn = adapter_for(url)
+        if fn and not site.selector:
+            return await self._get(url, settings, lambda client: fn(client, url))
+        html = await self.page(url, settings)
+        return await asyncio.to_thread(extract, html, site.unit, site.selector, site.out_selector)
+
+    async def page(self, url: str, settings: Settings) -> str:
+        async def get(client: httpx.AsyncClient) -> str:
             r = await client.get(url)
             if r.status_code in (403, 429, 503):
                 raise FetchError(f"سایت درخواست را رد کرد (HTTP {r.status_code})؛ شاید ربات‌ها را می‌بندد یا IP سرور خارج از ایران است")
             r.raise_for_status()
-            return await asyncio.to_thread(extract, r.text, site.unit, site.selector, site.out_selector)
+            return r.text
+
+        return await self._get(url, settings, get)
+
+    async def _get(self, url: str, settings: Settings, fn):
+        """Run one request to the URL's shop, spaced from the previous one."""
+        host = host_of(url)
+        lock = await self._polite(host, settings.host_delay_s)
+        try:
+            return await fn(self.client(settings))
         except httpx.HTTPStatusError as e:
             raise FetchError(f"HTTP {e.response.status_code}") from None
         except httpx.TimeoutException:

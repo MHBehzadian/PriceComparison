@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 
 from .extract import ExtractError, Result
+from .scraper import FetchError
 from .models import O_OK, O_OUT, Offer, Product, Settings, Site
 from .sites import seed_sites
 
@@ -80,5 +82,67 @@ class SimShops:
         method = o.method if o and o.status in (O_OK, O_OUT) and o.method else "jsonld"
         return Result(int(last * move // 10_000 * 10_000), method, True)
 
+    async def page(self, url: str, settings: Settings) -> str:
+        await asyncio.sleep(self.rnd.uniform(0.3, 0.8))
+        return demo_listing(url)
+
     async def close(self) -> None:
         pass
+
+
+# ---------------------------------------------------------------- listings
+# building materials, as three shops might name them: (names per shop style, toman)
+MATERIALS = [
+    (("سیمان پاکتی تیپ ۲ تهران", "خرید سیمان تیپ 2 تهران 50 کیلویی", "سیمان تیپ 2 تهران (پاکتی)"), 185_000),
+    (("سیمان سفید ساوه ۴۰ کیلویی", "سیمان سفید ساوه", "سیمان سفید ساوه 40 کیلوگرم"), 265_000),
+    (("میلگرد ۱۲ ذوب آهن اصفهان", "میلگرد 12 ذوب آهن اصفهان شاخه 12 متری", "میلگرد ۱۲ ذوب‌آهن"), 1_150_000),
+    (("میلگرد ۱۴ ذوب آهن اصفهان", "میلگرد 14 ذوب آهن اصفهان", "میلگرد ۱۴ ذوب‌آهن"), 1_560_000),
+    (("میلگرد ۱۶ ذوب آهن اصفهان", "میلگرد 16 ذوب آهن", "میلگرد ۱۶ ذوب‌آهن اصفهان"), 2_040_000),
+    (("گچ سفید سمنان ۴۰ کیلویی", "گچ سفید سمنان", "گچ سمنان سفید"), 98_000),
+    (("گچ خاک سمنان", "گچ خاک سمنان 40 کیلویی", "گچ خاک"), 82_000),
+    (("آجر سفال ۱۰ سوراخ", "آجر سفال 10 سوراخ", "آجر سفالی ۱۰ سوراخ"), 4_300),
+    (("بلوک سیمانی ۲۰", "بلوک سیمانی 20 سانتی", "بلوک سیمانی ۲۰ سانت"), 21_000),
+    (("ایزوگام دلیجان شرق", "ایزوگام شرق دلیجان", "عایق ایزوگام شرق"), 1_380_000),
+    (("چسب کاشی پودری ۲۰ کیلویی", "چسب کاشی پودری 20 کیلویی", "چسب کاشی پودری"), 315_000),
+    (("پشم سنگ ۵ سانت", "پشم سنگ 5 سانتی رول", "پشم سنگ ۵"), 890_000),
+    (("سیم مفتول ۱ میل", "مفتول آرماتوربندی 1 میل", "سیم مفتول آرماتور ۱"), 61_000),
+    (("ماسه شسته (تنی)", "ماسه شسته", "ماسه شسته ساختمانی"), 690_000),
+    (("لوله پلی اتیلن ۶۳", "لوله پلی‌اتیلن 63", "لوله پلی اتیلن ۶۳ میلی"), 410_000),
+    (("کاشی دیواری ۳۰×۹۰ سفید", "تیرچه بتنی ۴ متری", "شن نخودی"), 520_000),
+]
+PER_PAGE = 6
+
+
+def _shop_items(host: str) -> list[tuple[str, str, int]]:
+    style = 0 if "masaleh" in host else 1 if "shahr" in host else 2
+    rnd = random.Random(host)
+    out = []
+    for i, (names, base) in enumerate(MATERIALS):
+        if rnd.random() < 0.15:
+            continue  # not every shop carries everything
+        price = int(base * rnd.uniform(0.92, 1.1) // 1000 * 1000) or base
+        out.append((names[style], f"m{i}", price))
+    return out
+
+
+def demo_listing(url: str) -> str:
+    """A category page for any shop: WooCommerce markup with pages /page/N/,
+    or emalls-style ~id~ links with ~page~N."""
+    host = url.split("/")[2].removeprefix("www.")
+    items = _shop_items(host)
+    emalls = "~Category~" in url
+    m = re.search(r"~page~(\d+)|/page/(\d+)/", url)
+    page = int(next(g for g in m.groups() if g)) if m else 1
+    chunk = items[(page - 1) * PER_PAGE: page * PER_PAGE]
+    if not chunk:
+        raise FetchError("HTTP 404")
+    fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+    money = lambda v: f"{v:,}".replace(",", "٬").translate(fa)  # noqa: E731
+    if emalls:
+        cards = "".join(f'<div class="item"><a href="/مشخصات_{slug}~id~{1000 + int(slug[1:])}" title="{n}">{n}</a>'
+                        f'<span>از {money(p)} تومان</span></div>' for n, slug, p in chunk)
+        return f"<html><body><h1>لیست قیمت مصالح ساختمانی</h1>{cards}</body></html>"
+    cards = "".join(f'<li class="product"><a href="https://{host}/product/{slug}/" class="woocommerce-LoopProduct-link">'
+                    f'<h2 class="woocommerce-loop-product__title">{n}</h2><span class="price"><span class="woocommerce-Price-amount amount">'
+                    f'{money(p)} <span class="woocommerce-Price-currencySymbol">تومان</span></span></span></a></li>' for n, slug, p in chunk)
+    return f'<html><body><h1>مصالح ساختمانی</h1><ul class="products">{cards}</ul></body></html>'

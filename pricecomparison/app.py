@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from . import __version__
 from .auth import COOKIE, SESSION_TTL, Auth
 from .extract import ExtractError
+from .importer import Importer
 from .models import UNITS, Offer, Product, Site
 from .monitor import Monitor
 from .scraper import FetchError, Fetcher, HTTPFetcher
@@ -43,6 +44,8 @@ class SiteIn(BaseModel):
     unit: str = "auto"
     selector: str = Field("", max_length=300)
     out_selector: str = Field("", max_length=300)
+    list_selector: str = Field("", max_length=300)
+    next_selector: str = Field("", max_length=300)
     note: str = Field("", max_length=200)
 
     @field_validator("domains")
@@ -115,6 +118,30 @@ class TestIn(BaseModel):
         return _url(v)
 
 
+class ImportIn(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=20)
+    max_pages: int = Field(20, ge=1, le=100)
+
+    @field_validator("urls")
+    @classmethod
+    def _u(cls, v):
+        out = [_url(x) for x in v if x.strip()]
+        if not out:
+            raise ValueError("حداقل یک لینک لازم است")
+        return out
+
+
+class PickIn(BaseModel):
+    index: int
+    name: str = Field("", max_length=120)
+    urls: list[str] = []
+
+
+class ApplyIn(BaseModel):
+    category: str = Field("", max_length=40)
+    groups: list[PickIn]
+
+
 class SettingsIn(BaseModel):
     interval_min: int = Field(360, ge=5, le=7 * 24 * 60)
     timeout_s: int = Field(20, ge=5, le=120)
@@ -167,6 +194,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         seed_sites(store)
         fetcher = fetcher or HTTPFetcher()
     mon = Monitor(store, fetcher)
+    imp = Importer(store, fetcher)
     monitor_enabled = os.environ.get("PC_NO_MONITOR") != "1"
     tasks: set[asyncio.Task] = set()
 
@@ -182,7 +210,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         yield
         if loop:
             loop.cancel()
-        for t in list(tasks):
+        for t in [*tasks, *imp.tasks.values()]:
             t.cancel()
         await fetcher.close()
         store.save()
@@ -244,6 +272,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             "settings": store.settings.to_dict(),
             "busy": sorted(mon.busy),
             "last_run": mon.last_run,
+            "import": (lambda j: j.to_dict(groups=False) if j else None)(max(imp.jobs.values(), key=lambda j: j.started, default=None)),
             "version": __version__,
             "demo": demo,
             "now": time.time(),
@@ -259,6 +288,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await hub.send(msg)
 
     mon.broadcast = broadcast
+    imp.broadcast = broadcast
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
@@ -425,6 +455,35 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         ]
         background(mon.check_many(offers))
         return {"ok": True, "count": len(offers)}
+
+    # ---- category import ---------------------------------------------
+    @app.post("/api/import", dependencies=A)
+    async def start_import(body: ImportIn):
+        if any(j.status == "running" for j in imp.jobs.values()):
+            raise HTTPException(409, "یک ورود از دسته‌بندی در جریان است؛ تا تمام شدنش صبر کنید")
+        job = imp.start(body.urls, body.max_pages)
+        await mon.emit("info", "import", f"خواندن {len(job.sources)} صفحه دسته‌بندی شروع شد")
+        await mon.changed()
+        return job.to_dict()
+
+    @app.get("/api/import/{jid}", dependencies=A)
+    async def get_import(jid: str):
+        return get(imp.jobs, jid).to_dict()
+
+    @app.post("/api/import/{jid}/cancel", dependencies=A)
+    async def cancel_import(jid: str):
+        imp.cancel(get(imp.jobs, jid))
+        return {"ok": True}
+
+    @app.post("/api/import/{jid}/apply", dependencies=A)
+    async def apply_import(jid: str, body: ApplyIn):
+        job = get(imp.jobs, jid)
+        if job.status != "done":
+            raise HTTPException(409, "این ورود هنوز تمام نشده یا قبلا اعمال شده")
+        created, linked, _ = imp.apply(job, [g.model_dump() for g in body.groups], body.category.strip())
+        await mon.emit("success", "import", f"از صفحه‌های دسته‌بندی {created} محصول جدید و {linked} لینک اضافه شد")
+        await mon.changed()
+        return {"created": created, "linked": linked}
 
     # ---- settings ----------------------------------------------------
     @app.get("/api/settings", dependencies=A)

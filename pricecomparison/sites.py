@@ -16,6 +16,8 @@ DEFAULT_SITES: list[dict] = [
     {"name": "لیون کامپیوتر", "domains": ["lioncomputer.com"]},
     {"name": "دیجی‌استایل", "domains": ["digistyle.com"]},
     {"name": "خانومی", "domains": ["khanoumi.com"]},
+    {"name": "شهر ساختمانی", "domains": ["shahrsakhtemani.com"], "note": "مصالح ساختمانی"},
+    {"name": "مصالح تهران", "domains": ["masaleh-tehran.ir"], "note": "مصالح ساختمانی"},
 ]
 
 

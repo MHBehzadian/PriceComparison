@@ -54,6 +54,9 @@ class Site(Model):
     # optional overrides, for shops the automatic readers get wrong
     selector: str = ""  # CSS selector of the element holding the price
     out_selector: str = ""  # CSS selector present only when out of stock
+    # category import: product links on a listing page, and its next-page link
+    list_selector: str = ""
+    next_selector: str = ""
     note: str = ""
     created: float = field(default_factory=now)
 
@@ -65,6 +68,7 @@ class Product(Model):
     category: str = ""
     note: str = ""
     target_price: int | None = None  # toman; an event fires when any shop goes below it
+    aliases: list[str] = field(default_factory=list)  # names the shops give it, for matching imports
     created: float = field(default_factory=now)
 
 
