@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import units
 from .models import Event, Offer, Product, Settings, Site
 
 MAX_EVENTS = 1000
@@ -84,16 +85,68 @@ class Store:
     def offers_of(self, product_id: str) -> list[Offer]:
         return [o for o in self.offers.values() if o.product_id == product_id]
 
-    def cheapest(self, product_id: str) -> Offer | None:
-        live = [
-            o for o in self.offers_of(product_id)
-            if o.price and o.status == "ok" and o.enabled and self.sites.get(o.site_id, Site("", [])).enabled
-        ]
-        return min(live, key=lambda o: o.price) if live else None
+    def live(self, o: Offer) -> bool:
+        return bool(o.price) and o.status == "ok" and o.enabled and self.sites.get(o.site_id, Site("", [])).enabled
+
+    @staticmethod
+    def qty_of(o: Offer) -> units.Qty | None:
+        return units.Qty.from_dict(o.qty_manual) or units.Qty.from_dict(o.qty)
+
+    def compare(self, product_id: str, offers: list[Offer] | None = None) -> dict[str, Any]:
+        """A product's prices in one unit. Returns {"ref": Qty | None,
+        "auto": bool, "offers": {offer id: {"norm": toman for ref | None,
+        "state": "ok" | "other" | "unknown" | "none"}}}.
+
+        With no unit known for any shop, prices are compared as they are
+        ("none"). Otherwise a shop's price counts only once it is converted
+        to the reference unit: a different kind of unit ("other", a price
+        per piece next to prices per kilo) or no unit at all ("unknown")
+        keeps it out of the comparison until the admin sets it."""
+        p = self.products.get(product_id)
+        offers = self.offers_of(product_id) if offers is None else offers
+        qtys = {o.id: self.qty_of(o) for o in offers}
+        known = [q for q in qtys.values() if q]
+        manual = units.Qty.from_dict(p.ref_unit) if p else None
+        ref = manual or units.choose_ref(known)
+        out: dict[str, dict[str, Any]] = {}
+        for o in offers:
+            q = qtys[o.id]
+            if ref is None:
+                out[o.id] = {"norm": o.price, "state": "none"}
+            elif q is None:
+                out[o.id] = {"norm": None, "state": "unknown"}
+            else:
+                v = units.convert(o.price, q, ref) if o.price else None
+                out[o.id] = {"norm": round(v) if v is not None else None, "state": "ok" if q.dim == ref.dim else "other"}
+        return {"ref": ref, "auto": manual is None, "offers": out}
+
+    def cheapest(self, product_id: str, cmp: dict[str, Any] | None = None) -> Offer | None:
+        cmp = cmp or self.compare(product_id)
+        live = [o for o in self.offers_of(product_id) if self.live(o) and cmp["offers"][o.id]["norm"] is not None
+                and cmp["offers"][o.id]["state"] in ("ok", "none")]
+        return min(live, key=lambda o: cmp["offers"][o.id]["norm"]) if live else None
 
     def snapshot(self) -> dict[str, Any]:
+        products, offers = [], []
+        by_product: dict[str, list[Offer]] = {}
+        for o in self.offers.values():
+            by_product.setdefault(o.product_id, []).append(o)
+        for p in sorted(self.products.values(), key=lambda p: p.created):
+            mine = by_product.get(p.id, [])
+            cmp = self.compare(p.id, mine)
+            ref = cmp["ref"]
+            seen = [q for q in (self.qty_of(o) for o in mine) if q]
+            products.append({
+                **p.to_dict(),
+                "ref": ref.to_dict() if ref else None,
+                "ref_auto": cmp["auto"],
+                "ref_options": [q.to_dict() for q in units.ref_options(ref.dim, seen)] if ref else [],
+            })
+            for o in mine:
+                q = self.qty_of(o)
+                offers.append({**o.to_dict(), **cmp["offers"][o.id], "unit": q.to_dict() if q else None})
         return {
             "sites": [s.to_dict() for s in sorted(self.sites.values(), key=lambda s: s.created)],
-            "products": [p.to_dict() for p in sorted(self.products.values(), key=lambda p: p.created)],
-            "offers": [o.to_dict() for o in self.offers.values()],
+            "products": products,
+            "offers": offers,
         }

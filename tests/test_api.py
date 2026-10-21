@@ -125,6 +125,7 @@ def test_test_endpoint(env):
     shops.prices["https://basalam.com/p/1"] = 450_000
     assert c.post("/api/test", json={"url": "https://basalam.com/p/1"}).json() == {
         "ok": True, "price": 450_000, "old_price": None, "available": True, "method": "jsonld", "guess": False,
+        "title": "", "unit": None,
     }
     assert c.post("/api/test", json={"url": "https://basalam.com/p/2"}).json()["ok"] is False
 
@@ -216,3 +217,36 @@ def test_bulk_delete_products(env):
     assert r == {"deleted": 2}
     assert list(store.products) == [ids[2]]
     assert [o.product_id for o in store.offers.values()] == [ids[2]]
+
+
+def test_units_api(env):
+    c, shops, store = env
+    a, b = "https://masaleh-tehran.ir/product/c/", "https://shahrsakhtemani.com/product/c/"
+    shops.prices = {a: 185_000, b: 3_500_000}
+    pid = c.post("/api/products", json={"name": "سیمان تیپ ۲ تهران", "urls": [a, b]}).json()["id"]
+    for o in store.offers_of(pid):
+        c.post(f"/api/offers/{o.id}/check")
+    oa = next(o for o in store.offers_of(pid) if o.url == a)
+    ob = next(o for o in store.offers_of(pid) if o.url == b)
+    # nothing on the pages: the name has no unit, so prices compare as they are
+    assert store.compare(pid)["ref"] is None
+
+    assert c.post("/api/units/parse", json={"text": "هر تن"}).json()["unit"]["amount"] == 1000
+    assert c.put(f"/api/offers/{ob.id}/unit", json={"text": "هر تن"}).status_code == 200
+    st = c.get("/api/state").json()
+    offers = {o["id"]: o for o in st["offers"]}
+    assert offers[oa.id]["state"] == "unknown"  # one shop has a unit now, the other must get one too
+    assert c.put(f"/api/offers/{oa.id}/unit", json={"text": "کیسه ۵۰ کیلویی"}).status_code == 200
+    st = c.get("/api/state").json()
+    prod = next(p for p in st["products"] if p["id"] == pid)
+    offers = {o["id"]: o for o in st["offers"]}
+    assert prod["ref"]["dim"] == "mass"
+    # 3.5M a ton is 175k a bag: the per-ton shop is the cheaper one
+    assert store.cheapest(pid).id == ob.id
+
+    assert c.put(f"/api/products/{pid}/ref", json={"dim": "mass", "amount": 1000}).status_code == 200
+    offers = {o["id"]: o for o in c.get("/api/state").json()["offers"]}
+    assert offers[oa.id]["norm"] == 3_700_000 and offers[ob.id]["norm"] == 3_500_000
+    assert c.put(f"/api/offers/{oa.id}/unit", json={"text": "سلام"}).status_code == 422
+    c.put(f"/api/offers/{oa.id}/unit", json={"text": ""})
+    assert store.offers[oa.id].qty_manual is None

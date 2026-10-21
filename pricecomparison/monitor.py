@@ -8,6 +8,7 @@ import time
 from typing import Any, Awaitable, Callable
 
 from .extract import ExtractError
+from . import units
 from .models import O_ERROR, O_OK, O_OUT, Event, Offer
 from .scraper import FetchError, Fetcher
 from .store import Store
@@ -70,6 +71,12 @@ class Monitor:
                 await self.emit("success", "offer", f"قیمت «{pname}» از {sname} دوباره خوانده شد", offer=o.id, product=o.product_id)
             o.error, o.fail_count, o.method, o.last_ok = "", 0, res.method, time.time()
             o.old_price = res.old_price
+            o.title = res.title or o.title
+            if res.qty:
+                o.qty = res.qty
+            elif not o.qty:  # the page says nothing about units: try the name
+                q = units.parse_name(o.title or pname)
+                o.qty = q.to_dict() if q else None
             if res.available and res.price:
                 o.status, o.price = O_OK, res.price
             else:
@@ -96,15 +103,22 @@ class Monitor:
             await self.emit("success", "stock", f"«{pname}» در {sname} دوباره موجود شد: {fmt(o.price)}", **refs)
 
         p = self.store.products.get(o.product_id)
-        best = self.store.cheapest(o.product_id)
+        cmp = self.store.compare(o.product_id)
+        ref = cmp["ref"]
+        per = f" برای هر {ref.label}" if ref else ""
+        best = self.store.cheapest(o.product_id, cmp)
         cheapest: dict[str, Any] = self.store.meta.setdefault("cheapest", {})
         prev = cheapest.get(o.product_id)
         if best and prev and prev != best.site_id:
             bname = self.store.sites[best.site_id].name
-            await self.emit("info", "cheapest", f"ارزان‌ترین فروشنده «{pname}» حالا {bname} است: {fmt(best.price)}", **refs)
+            await self.emit("info", "cheapest", f"ارزان‌ترین فروشنده «{pname}» حالا {bname} است: {fmt(cmp['offers'][best.id]['norm'])}{per}", **refs)
         cheapest[o.product_id] = best.site_id if best else None
-        if p and p.target_price and o.price and o.price <= p.target_price and not (before and before <= p.target_price):
-            await self.emit("success", "target", f"«{pname}» در {sname} به قیمت هدف رسید: {fmt(o.price)}", **refs)
+        # the target price is per the comparison unit, like every price on the product's page
+        now_v = cmp["offers"][o.id]["norm"] if cmp["offers"][o.id]["state"] in ("ok", "none") else None
+        q = self.store.qty_of(o)
+        was_v = units.convert(before, q, ref) if before and q and ref else before if not ref else None
+        if p and p.target_price and now_v and now_v <= p.target_price and not (was_v and was_v <= p.target_price):
+            await self.emit("success", "target", f"«{pname}» در {sname} به قیمت هدف رسید: {fmt(now_v)}{per}", **refs)
 
     async def check_many(self, offers: list[Offer]) -> None:
         sem = asyncio.Semaphore(max(1, self.store.settings.concurrency))

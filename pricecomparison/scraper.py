@@ -14,6 +14,7 @@ from typing import Awaitable, Callable, Protocol
 
 import httpx
 
+from . import units
 from .extract import ExtractError, Result, extract, parse_number
 from .models import Settings, Site
 from .store import host_of
@@ -53,7 +54,9 @@ async def digikala(client: httpx.AsyncClient, url: str) -> Result:
     rrp = parse_number(price.get("rrp_price"))
     toman = int(selling // 10)  # the API answers in rial
     old = int(rrp // 10) if rrp and rrp > selling else None
-    return Result(toman, "api", True, old)
+    title = str(product.get("title_fa") or "")
+    qty = units.parse_name(title)
+    return Result(toman, "api", True, old, title=title, qty=qty.to_dict() if qty else None)
 
 
 ADAPTERS: dict[str, Callable[[httpx.AsyncClient, str], Awaitable[Result]]] = {

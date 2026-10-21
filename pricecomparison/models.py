@@ -69,6 +69,7 @@ class Product(Model):
     note: str = ""
     target_price: int | None = None  # toman; an event fires when any shop goes below it
     aliases: list[str] = field(default_factory=list)  # names the shops give it, for matching imports
+    ref_unit: dict | None = None  # units.Qty the admin picked to compare in; None = automatic
     created: float = field(default_factory=now)
 
 
@@ -81,11 +82,14 @@ class Offer(Model):
     url: str
     id: str = field(default_factory=lambda: new_id("o"))
     enabled: bool = True
+    qty_manual: dict | None = None  # units.Qty set by the admin; wins over what is read
     # runtime
     status: str = O_PENDING
     price: int | None = None  # toman
     old_price: int | None = None  # list price before discount, if the shop shows one
     method: str = ""  # which reader found the price
+    title: str = ""  # the product's name on this shop
+    qty: dict | None = None  # units.Qty the price is for, as read from the shop
     error: str = ""
     last_check: float = 0
     last_ok: float = 0

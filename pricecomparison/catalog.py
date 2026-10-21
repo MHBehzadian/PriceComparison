@@ -23,6 +23,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
+from . import units
 from .extract import parse_number, parse_price_text, to_toman, unit_in
 
 PRODUCT_PATH = re.compile(r"/product/|/products?/[^/]+|~id~\d+|/dkp-\d+|/p/\d+|/item/|/shop/[^/]+/[^/]+", re.I)
@@ -43,6 +44,7 @@ class Item:
     name: str
     url: str
     price: int | None = None  # toman, as shown on the listing
+    near: str = ""  # the card's text around the price, where "/ کیلوگرم" would be
 
 
 @dataclass
@@ -84,7 +86,7 @@ def _card_price(card: Tag, site_unit: str) -> int | None:
     return to_toman(v, unit_in(text), site_unit) if v else None
 
 
-def _add(out: dict[str, Item], base: str, href: str, name: str, price: int | None) -> None:
+def _add(out: dict[str, Item], base: str, href: str, name: str, price: int | None, near: str = "") -> None:
     if not href:
         return
     url = _abs(base, href)
@@ -94,11 +96,12 @@ def _add(out: dict[str, Item], base: str, href: str, name: str, price: int | Non
     cur = out.get(url)
     if cur is None:
         if name:
-            out[url] = Item(name, url, price)
+            out[url] = Item(name, url, price, near[:300])
     else:
         if len(name) > len(cur.name):
             cur.name = name
         cur.price = cur.price or price
+        cur.near = cur.near or near[:300]
 
 
 def read_selector(soup: BeautifulSoup, base: str, selector: str, site_unit: str) -> dict[str, Item]:
@@ -108,7 +111,8 @@ def read_selector(soup: BeautifulSoup, base: str, selector: str, site_unit: str)
         if link is None:
             continue
         card = a.find_parent(["li", "article"]) or a.parent
-        _add(out, base, link.get("href", ""), link.get("title") or link.get_text(" ", strip=True), _card_price(card, site_unit) if card else None)
+        _add(out, base, link.get("href", ""), link.get("title") or link.get_text(" ", strip=True), _card_price(card, site_unit) if card else None,
+             _text_without_old(card) if card else "")
     return out
 
 
@@ -124,7 +128,7 @@ def read_woo(soup: BeautifulSoup, base: str, site_unit: str) -> dict[str, Item]:
                 continue
             title = next((card.select_one(s) for s in WOO_TITLE if card.select_one(s)), None)
             name = title.get_text(" ", strip=True) if title else link.get("title") or link.get_text(" ", strip=True)
-            _add(out, base, link.get("href", ""), name, _card_price(card, site_unit))
+            _add(out, base, link.get("href", ""), name, _card_price(card, site_unit), _text_without_old(card))
         if out:
             return out
     return out
@@ -164,7 +168,7 @@ def read_links(soup: BeautifulSoup, base: str, site_unit: str) -> dict[str, Item
         name = a.get("title") or a.get_text(" ", strip=True) or (img.get("alt", "") if img else "")
         # the product card: the nearest ancestor that shows a price and
         # does not also hold other products
-        price, node = None, a
+        price, node, near = None, a, ""
         for _ in range(5):
             node = node.parent
             if node is None or node.name in ("body", "html"):
@@ -176,8 +180,9 @@ def read_links(soup: BeautifulSoup, base: str, site_unit: str) -> dict[str, Item
             if "تومان" in text or "ریال" in text or "تومن" in text:
                 v = parse_price_text(text)
                 price = to_toman(v, unit_in(text), site_unit) if v else None
+                near = text
                 break
-        _add(out, base, href, name if len(_clean(name)) >= 3 else "", price)
+        _add(out, base, href, name if len(_clean(name)) >= 3 else "", price, near)
     return out
 
 
@@ -243,7 +248,9 @@ def tokens(name: str) -> list[str]:
 
 
 def similarity(a: str, b: str) -> float:
-    ta, tb = set(tokens(a)) - UNITS, set(tokens(b)) - UNITS
+    # package sizes do not make a different product: "گچ ۴۰ کیلویی" and
+    # "گچ ۲۵ کیلویی" are compared per kilo once grouped
+    ta, tb = set(tokens(units.strip_sizes(a))) - UNITS, set(tokens(units.strip_sizes(b))) - UNITS
     pa, pb = {PACKS[t] for t in ta if t in PACKS}, {PACKS[t] for t in tb if t in PACKS}
     if pa and pb and pa != pb:
         return 0.0  # bagged and bulk cement are different products
@@ -289,6 +296,8 @@ class Candidate:
     url: str
     site_id: str
     price: int | None = None
+    qty: dict | None = None  # units.Qty the listed price is for
+    norm: int | None = None  # the price in the group's unit
 
 
 @dataclass
@@ -298,6 +307,7 @@ class Group:
     name: str
     items: list[Candidate] = field(default_factory=list)
     product_id: str | None = None  # an existing product they match
+    ref: dict | None = None  # units.Qty the group's prices are compared in
     score: float = 1.0
 
     def to_dict(self) -> dict:
@@ -345,5 +355,15 @@ def group_items(items: list[Candidate], products: list[tuple[str, list[str]]], t
         if not g.product_id:
             g.name = best_name([c.name for c in g.items])
     # products found on more shops first: those are the comparisons
+    for g in groups:
+        qs = [units.Qty.from_dict(c.qty) for c in g.items]
+        ref = units.choose_ref([q for q in qs if q])
+        g.ref = ref.to_dict() if ref else None
+        for c, q in zip(g.items, qs):
+            if ref is None:
+                c.norm = c.price
+            elif q is not None and c.price:
+                v = units.convert(c.price, q, ref)
+                c.norm = round(v) if v is not None else None
     groups.sort(key=lambda g: (-len(g.items), g.product_id is None, g.name))
     return groups
