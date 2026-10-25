@@ -11,6 +11,8 @@ import secrets
 import time
 from pathlib import Path
 
+from .store import replace
+
 COOKIE = "pc_session"
 SESSION_TTL = 7 * 24 * 3600
 
@@ -37,15 +39,15 @@ class Auth:
         except FileNotFoundError:
             return
         if mtime != self._mtime:
-            self.data = json.loads(self.path.read_text())
+            self.data = json.loads(self.path.read_text(encoding="utf-8"))
             self._mtime = mtime
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data))
+        tmp.write_text(json.dumps(self.data), encoding="utf-8")
         os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        replace(tmp, self.path)
         self._mtime = self.path.stat().st_mtime
 
     @property

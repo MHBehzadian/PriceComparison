@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,6 +14,19 @@ from . import units
 from .models import Event, Offer, Product, Settings, Site
 
 MAX_EVENTS = 1000
+
+
+def replace(src: str | Path, dst: Path) -> None:
+    """os.replace, retried: on Windows a virus scanner or a backup tool
+    holding the old file open for a moment makes it fail."""
+    for attempt in range(10):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(0.2)
 
 
 def host_of(url: str) -> str:
@@ -38,7 +52,7 @@ class Store:
         self.events: list[Event] = []
         self.meta: dict[str, Any] = {}
         if self.path and self.path.exists():
-            self.apply(json.loads(self.path.read_text()))
+            self.apply(json.loads(self.path.read_text(encoding="utf-8")))
 
     # ---- persistence -------------------------------------------------
     def apply(self, raw: dict) -> None:
@@ -65,10 +79,11 @@ class Store:
         data = self.raw()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".state-")
-        with os.fdopen(fd, "w") as f:
+        # always UTF-8: Windows' default code page cannot hold Persian text
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
         os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        replace(tmp, self.path)
 
     # ---- queries -----------------------------------------------------
     def site_for_url(self, url: str) -> Site | None:
