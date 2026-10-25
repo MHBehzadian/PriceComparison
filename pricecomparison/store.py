@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import units
-from .models import Event, Offer, Product, Settings, Site
+from .models import Event, Folder, Offer, Product, Settings, Site
 
 MAX_EVENTS = 1000
 
@@ -50,6 +50,7 @@ class Store:
         self.offers: dict[str, Offer] = {}
         self.settings = Settings()
         self.events: list[Event] = []
+        self.folders: dict[str, Folder] = {}
         self.meta: dict[str, Any] = {}
         if self.path and self.path.exists():
             self.apply(json.loads(self.path.read_text(encoding="utf-8")))
@@ -61,6 +62,7 @@ class Store:
         self.offers = {d["id"]: Offer.from_dict(d) for d in raw.get("offers", [])}
         self.settings = Settings.from_dict(raw.get("settings", {}))
         self.events = [Event.from_dict(d) for d in raw.get("events", [])]
+        self.folders = {d["id"]: Folder.from_dict(d) for d in raw.get("folders", [])}
         self.meta = dict(raw.get("meta", {}))
 
     def raw(self) -> dict[str, Any]:
@@ -70,6 +72,7 @@ class Store:
             "offers": [o.to_dict() for o in self.offers.values()],
             "settings": self.settings.to_dict(),
             "events": [e.to_dict() for e in self.events[-MAX_EVENTS:]],
+            "folders": [f.to_dict() for f in self.folders.values()],
             "meta": self.meta,
         }
 
@@ -96,6 +99,14 @@ class Store:
                 if (host == d or host.endswith("." + d)) and len(d) > best_len:
                     best, best_len = s, len(d)
         return best
+
+    def folders_of(self, username: str) -> list[Folder]:
+        return sorted((f for f in self.folders.values() if f.owner == username), key=lambda f: f.created)
+
+    def forget_products(self, ids: set[str]) -> None:
+        """Take deleted products out of everyone's folders."""
+        for f in self.folders.values():
+            f.product_ids = [p for p in f.product_ids if p not in ids]
 
     def offers_of(self, product_id: str) -> list[Offer]:
         return [o for o in self.offers.values() if o.product_id == product_id]

@@ -21,6 +21,13 @@ let range = "30";
 let query = "";
 const hidden = new Set(); // offer ids hidden in the history chart
 let ws = null, wsAlive = false;
+let folder = "";       // product list shows this folder ("" = all products)
+try { folder = localStorage.getItem("pc-folder") || ""; } catch (_) { /* ignore */ }
+const isAdmin = () => !!(S && S.me && S.me.role === "admin");
+const FAV = "علاقه‌مندی‌ها";
+const myFolder = (id) => (S.folders || []).find((f) => f.id === id);
+const favFolder = () => (S.folders || []).find((f) => f.name === FAV);
+const inFolder = (f, pid) => !!f && f.product_ids.includes(pid);
 try { sel = localStorage.getItem("pc-sel"); range = localStorage.getItem("pc-range") || range; } catch (_) { /* ignore */ }
 
 /* ------------------------------------------------------------------ api */
@@ -147,6 +154,7 @@ function showAuth(configured = true) {
   $("#auth").classList.remove("hidden");
   const setup = !configured;
   $("#auth-sub").textContent = setup ? "اولین اجرا: یک نام کاربری و رمز عبور برای مدیر بسازید" : "ورود به پنل مقایسه قیمت";
+  if (setup && !$("#auth-form [name=username]").value) $("#auth-form [name=username]").value = "admin";
   $("#auth-btn").textContent = setup ? "ساخت حساب و ورود" : "ورود";
   $("#auth-form").onsubmit = async (e) => {
     e.preventDefault();
@@ -191,6 +199,10 @@ setInterval(() => { if (wsAlive) try { ws.send("ping"); } catch (_) { /* ignore 
 function setState(st) {
   S = st;
   skew = st.now - Date.now() / 1000;
+  document.body.classList.toggle("role-user", !isAdmin());
+  $("#me-name").textContent = S.me ? S.me.username : "";
+  $("#me-role").textContent = isAdmin() ? "مدیر" : "کاربر";
+  if (folder && !myFolder(folder)) folder = "";
   if (!product(sel)) sel = S.products.length ? S.products[0].id : null;
   renderAll();
 }
@@ -231,18 +243,33 @@ const fold = (t) => String(t || "").toLowerCase()
   .replace(/ي|ى/g, "ی").replace(/ك/g, "ک").replace(/[\u200c\s]+/g, " ").trim();
 const listed = () => {
   const q = fold(query);
-  return S.products.filter((p) => !q || [p.name, p.category, ...(p.aliases || [])].some((t) => fold(t).includes(q)));
+  const f = folder ? myFolder(folder) : null;
+  return S.products.filter((p) => (!f || f.product_ids.includes(p.id))
+    && (!q || [p.name, p.category, ...(p.aliases || [])].some((t) => fold(t).includes(q))));
 };
 
+function renderFolders() {
+  const fs = S.folders || [];
+  const chip = (id, name, n) => `<button class="fchip ${folder === id ? "on" : ""}" data-folder="${id}">${id && name === FAV ? "★ " : ""}${esc(name)} <b>${nf.format(n)}</b></button>`;
+  const cur = folder ? myFolder(folder) : null;
+  $("#folders").innerHTML = chip("", "همه محصولات", S.products.length) +
+    fs.map((f) => chip(f.id, f.name, f.product_ids.filter((id) => product(id)).length)).join("") +
+    `<button class="fchip add" data-folder-new title="ساخت پوشه جدید">＋ پوشه</button>` +
+    (cur ? `<span class="factions"><span class="linkish" data-folder-rename="${cur.id}">تغییر نام</span> · <span class="linkish danger-t" data-folder-del="${cur.id}">حذف پوشه</span></span>` : "");
+}
+
 function renderList() {
+  renderFolders();
   const list = listed();
   for (const id of [...picked]) if (!product(id)) picked.delete(id);
-  $("#pcount").textContent = query.trim() ? `${nf.format(list.length)} از ${nf.format(S.products.length)} محصول` : `${nf.format(S.products.length)} محصول`;
+  const total = folder ? (myFolder(folder) || { product_ids: [] }).product_ids.filter((id) => product(id)).length : S.products.length;
+  $("#pcount").textContent = query.trim() ? `${nf.format(list.length)} از ${nf.format(total)} محصول` : `${nf.format(total)} محصول`;
   $("#btn-pick").classList.toggle("hidden", !S.products.length);
-  $("#btn-pick").textContent = picking ? "لغو انتخاب" : "انتخاب و حذف چندتایی";
+  $("#btn-pick").textContent = picking ? "لغو انتخاب" : "انتخاب چندتایی";
   $("#pick-bar").classList.toggle("hidden", !picking);
   $("#pick-n").textContent = `${nf.format(picked.size)} انتخاب شده`;
-  $("#pick-del").disabled = !picked.size;
+  for (const id of ["#pick-del", "#pick-folder", "#pick-out"]) $(id).disabled = !picked.size;
+  $("#pick-out").classList.toggle("hidden", !folder);
   $("#pitems").classList.toggle("picking", picking);
   $("#pitems").innerHTML = list.map((p) => {
     const sm = summary(p.id);
@@ -250,11 +277,11 @@ function renderList() {
       ? `<b>${short(sm.min)}</b>${sm.ref ? `<span class="per">/ ${esc(sm.ref.label)}</span>` : ""}<span class="sep">·</span><span>${esc(sname(sm.best.site_id))}</span>`
       : `<span>${sm.all.length ? "قیمتی خوانده نشده" : "بدون لینک"}</span>`;
     return `<button class="pitem ${p.id === sel && !picking ? "on" : ""} ${picked.has(p.id) ? "picked" : ""}" data-p="${p.id}">
-      <span class="pn">${picking ? `<input type="checkbox" tabindex="-1" ${picked.has(p.id) ? "checked" : ""}> ` : ""}${esc(p.name)}</span>
+      <span class="pn">${picking ? `<input type="checkbox" tabindex="-1" ${picked.has(p.id) ? "checked" : ""}> ` : ""}${inFolder(favFolder(), p.id) ? `<span class="star on" title="${FAV}">★</span> ` : ""}${esc(p.name)}</span>
       <span class="pp">${best}<span class="sep">·</span><span>${nf.format(sm.all.length)} سایت</span>
       ${sm.errors ? `<span class="chip bad">${nf.format(sm.errors)} خطا</span>` : ""}
       ${p.category ? `<span class="chip">${esc(p.category)}</span>` : ""}</span></button>`;
-  }).join("") || `<div class="muted small" style="padding:10px">${S.products.length ? "محصولی پیدا نشد" : "هنوز محصولی اضافه نشده"}</div>`;
+  }).join("") || `<div class="muted small" style="padding:10px">${folder && !total ? "این پوشه خالی است؛ از صفحه هر محصول یا با «انتخاب چندتایی» محصول اضافه کنید" : S.products.length ? "محصولی پیدا نشد" : "هنوز محصولی اضافه نشده"}</div>`;
 }
 $("#psearch").oninput = (e) => { query = e.target.value; renderList(); };
 $("#pitems").onclick = (e) => {
@@ -268,6 +295,13 @@ $("#pitems").onclick = (e) => {
 $("#btn-pick").onclick = () => { picking = !picking; picked.clear(); renderList(); };
 $("#pick-all").onclick = () => { listed().forEach((p) => picked.add(p.id)); renderList(); };
 $("#pick-none").onclick = () => { picked.clear(); renderList(); };
+$("#pick-folder").onclick = () => folderPicker([...picked]);
+$("#pick-out").onclick = async () => {
+  const f = myFolder(folder);
+  if (!f || !picked.size) return;
+  await act(() => api("POST", `/api/folders/${f.id}/products`, { product_ids: [...picked], add: false }), `از «${f.name}» خارج شد`);
+  picked.clear();
+};
 $("#pick-del").onclick = async () => {
   const ids = [...picked];
   if (!ids.length || !confirm(`${nf.format(ids.length)} محصول و همه لینک‌ها و تاریخچه قیمتشان حذف شود؟`)) return;
@@ -292,7 +326,11 @@ function refChooser(p, sm) {
   const other = sm.all.filter((o) => o.state === "other").length;
   if (!p.ref) {
     return `<div class="unitbar muted small">واحد فروش هیچ سایتی معلوم نیست؛ قیمت‌ها همان‌طور که سایت‌ها نوشته‌اند مقایسه می‌شوند.
-      در جدول لینک‌ها برای هر سایت «واحد» را تعیین کنید.</div>`;
+      ${isAdmin() ? "در جدول لینک‌ها برای هر سایت «واحد» را تعیین کنید." : ""}</div>`;
+  }
+  if (!isAdmin()) {
+    return `<div class="unitbar">قیمت‌ها <b>هر ${esc(p.ref.label)}</b> مقایسه می‌شوند
+      ${unknown + other ? `<span class="chip warn">${nf.format(unknown + other)} سایت قابل مقایسه نیست</span>` : ""}</div>`;
   }
   const opts = p.ref_options.map((q) => `<option value="${q.dim}|${q.amount}|${esc(q.label)}" ${!p.ref_auto && sameUnit(q, p.ref) ? "selected" : ""}>هر ${esc(q.label)}</option>`).join("");
   return `<div class="unitbar"><label>مقایسه قیمت‌ها بر اساس
@@ -328,10 +366,12 @@ function renderDetail() {
           <span>${nf.format(sm.all.length)} سایت</span>${p.note ? `<span>· ${esc(p.note)}</span>` : ""}</div>
           ${refChooser(p, sm)}</div>
         <div class="btns">
+          <button class="btn sm star-btn ${inFolder(favFolder(), p.id) ? "on" : ""}" data-fav="${p.id}" title="${inFolder(favFolder(), p.id) ? `حذف از ${FAV}` : `افزودن به ${FAV}`}">${inFolder(favFolder(), p.id) ? "★" : "☆"} ${FAV}</button>
+          <button class="btn sm" data-folders="${p.id}" title="این محصول در کدام پوشه‌های شما باشد">پوشه‌ها${(S.folders || []).some((f) => inFolder(f, p.id)) ? ` (${nf.format((S.folders || []).filter((f) => inFolder(f, p.id)).length)})` : ""}</button>
           <button class="btn sm" data-check-product="${p.id}" ${working ? "disabled" : ""}>${working ? `<span class="spin"></span> در حال بررسی` : "بررسی قیمت‌ها"}</button>
-          <button class="btn sm" data-add="offer">＋ لینک سایت</button>
+          ${isAdmin() ? `<button class="btn sm" data-add="offer">＋ لینک سایت</button>
           <button class="btn sm" data-edit-product="${p.id}">ویرایش</button>
-          <button class="btn sm danger" data-del-product="${p.id}">حذف محصول</button>
+          <button class="btn sm danger" data-del-product="${p.id}">حذف محصول</button>` : ""}
         </div>
       </div>
     </div>
@@ -400,7 +440,7 @@ function compareChart(sm) {
       const sub = o.state === "unknown"
         ? `${toman(o.price)} — معلوم نیست برای چه مقداری`
         : `${toman(o.price)} برای ${esc(o.unit.label)}؛ با «${esc(sm.ref.label)}» قابل مقایسه نیست`;
-      val = `<b>${why}</b><span>${sub}</span><span><span class="linkish" role="button" data-unit-offer="${o.id}">تعیین واحد</span></span>`;
+      val = `<b>${why}</b><span>${sub}</span>${isAdmin() ? `<span><span class="linkish" role="button" data-unit-offer="${o.id}">تعیین واحد</span></span>` : ""}`;
     } else {
       cls = o.status === "out" ? "out" : o.status === "error" ? "err" : "out";
       const word = !o.enabled || !s.enabled ? "غیرفعال" : o.status === "out" ? "ناموجود" : o.status === "error" ? "خطا در خواندن" : "در انتظار بررسی";
@@ -433,7 +473,7 @@ function offerTable(sm) {
       <td><a class="cs shop" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه محصول در ${esc(sname(o.site_id))}"><i class="sw2" style="width:10px;height:10px;border-radius:3px;background:${siteColor(o.site_id, o.product_id)}"></i>${esc(sname(o.site_id))} ${ICON.go}</a>
         <div><a class="url" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="${esc(o.url)}">${esc(o.url.replace(/^https?:\/\/(www\.)?/, ""))}</a></div></td>
       <td class="own-price">${o.price ? toman(o.price) : "—"}${o.old_price ? `<div><span class="old">${num(o.old_price)}</span></div>` : ""}</td>
-      <td><span class="unit-cell">${unitChip(o)}<button class="btn sm ghost" data-unit-offer="${o.id}" title="تعیین واحد فروش این سایت">ویرایش</button></span></td>
+      <td><span class="unit-cell">${unitChip(o)}${isAdmin() ? `<button class="btn sm ghost" data-unit-offer="${o.id}" title="تعیین واحد فروش این سایت">ویرایش</button>` : ""}</span></td>
       <td class="price">${normCell}</td>
       <td>${diff}</td><td>${method}</td>
       <td class="small muted" title="${o.last_check ? esc(new Date(o.last_check * 1000).toLocaleString("fa-IR")) : ""}">${ago(o.last_check)}</td>
@@ -441,8 +481,8 @@ function offerTable(sm) {
       <td><span class="row-acts">
         <button class="btn icon" data-check-offer="${o.id}" title="بررسی همین لینک">${ICON.check}</button>
         <a class="btn sm" href="${esc(o.url)}" target="_blank" rel="noopener noreferrer" title="باز کردن صفحه محصول در ${esc(sname(o.site_id))}">مشاهده در سایت ${ICON.go}</a>
-        <button class="btn icon" data-toggle-offer="${o.id}" title="${o.enabled ? "غیرفعال کردن" : "فعال کردن"}">${o.enabled ? ICON.pause : ICON.play}</button>
-        <button class="btn icon" data-del-offer="${o.id}" title="حذف لینک">${ICON.del}</button></span></td></tr>`;
+        ${isAdmin() ? `<button class="btn icon" data-toggle-offer="${o.id}" title="${o.enabled ? "غیرفعال کردن" : "فعال کردن"}">${o.enabled ? ICON.pause : ICON.play}</button>
+        <button class="btn icon" data-del-offer="${o.id}" title="حذف لینک">${ICON.del}</button>` : ""}</span></td></tr>`;
   }).join("");
 }
 
@@ -608,7 +648,7 @@ function renderSites() {
 }
 $("#sites-table").onclick = (e) => {
   const tr = e.target.closest("[data-site]");
-  if (tr) siteForm(site(tr.dataset.site));
+  if (tr && isAdmin()) siteForm(site(tr.dataset.site));
 };
 
 /* --------------------------------------------------------------- events */
@@ -981,8 +1021,135 @@ document.addEventListener("change", (e) => {
   act(() => api("PUT", `/api/products/${sel.dataset.ref}/ref`, { dim, amount: +amount, label }));
 });
 
+/* ---------------------------------------------------------------- folders */
+async function createFolder(name) {
+  return api("POST", "/api/folders", { name });
+}
+
+async function toggleFav(pid) {
+  let f = favFolder();
+  if (!f) f = await act(() => createFolder(FAV));
+  const add = !inFolder(f, pid);
+  await act(() => api("POST", `/api/folders/${f.id}/products`, { product_ids: [pid], add }), add ? `به ${FAV} اضافه شد` : `از ${FAV} حذف شد`);
+}
+
+function newFolder() {
+  openModal(`<h2>پوشه جدید</h2>
+    <label>نام پوشه<input name="name" required maxlength="40" placeholder="مثلا: پروژه ساختمان ونک"></label>
+    ${actions("ساخت پوشه")}`,
+  async (fd) => {
+    const f = await act(() => createFolder(fd.get("name").trim()), "پوشه ساخته شد");
+    folder = f.id;
+    try { localStorage.setItem("pc-folder", folder); } catch (_) { /* ignore */ }
+  });
+}
+
+function renameFolder(f) {
+  if (!f) return;
+  openModal(`<h2>تغییر نام پوشه</h2>
+    <label>نام پوشه<input name="name" required maxlength="40" value="${esc(f.name)}"></label>
+    ${actions("ذخیره")}`,
+  async (fd) => { await act(() => api("PUT", `/api/folders/${f.id}`, { name: fd.get("name").trim() }), "ذخیره شد"); });
+}
+
+async function deleteFolder(f) {
+  if (!f || !confirm(`پوشه «${f.name}» حذف شود؟ خود محصولات حذف نمی‌شوند.`)) return;
+  await act(() => api("DELETE", `/api/folders/${f.id}`), "پوشه حذف شد");
+  folder = "";
+}
+
+// which of my folders hold these products: tick to add, untick to take out
+function folderPicker(pids) {
+  if (!pids.length) return;
+  const fs = S.folders || [];
+  const many = pids.length > 1;
+  const state = (f) => { const n = pids.filter((id) => inFolder(f, id)).length; return n === pids.length ? "all" : n ? "some" : "none"; };
+  openModal(`<h2>${many ? `افزودن ${nf.format(pids.length)} محصول به پوشه` : `پوشه‌های «${esc((product(pids[0]) || {}).name || "")}»`}</h2>
+    ${fs.length ? `<div class="fpick">${fs.map((f) => `<label class="check"><input type="checkbox" name="f" value="${f.id}" ${state(f) === "all" ? "checked" : ""}>
+      ${f.name === FAV ? "★ " : ""}${esc(f.name)} <span class="muted small">${nf.format(f.product_ids.length)} محصول${state(f) === "some" ? "، بعضی از انتخاب‌ها داخلش هستند" : ""}</span></label>`).join("")}</div>`
+      : `<p class="note">هنوز پوشه‌ای ندارید.</p>`}
+    <label>پوشه جدید (اختیاری)<input name="new" maxlength="40" placeholder="نام پوشه جدید"></label>
+    <p class="hint">پوشه‌ها مال خود شماست و دیگران آن‌ها را نمی‌بینند.</p>
+    ${actions("ذخیره")}`,
+  async (fd, form) => {
+    const want = new Set(fd.getAll("f"));
+    for (const f of fs) {
+      const st = state(f);
+      if (want.has(f.id) && st !== "all") await api("POST", `/api/folders/${f.id}/products`, { product_ids: pids, add: true });
+      if (!want.has(f.id) && st === "all") await api("POST", `/api/folders/${f.id}/products`, { product_ids: pids, add: false });
+    }
+    const name = (fd.get("new") || "").trim();
+    if (name) {
+      const f = await createFolder(name);
+      await api("POST", `/api/folders/${f.id}/products`, { product_ids: pids, add: true });
+    }
+    toast("پوشه‌ها به‌روز شد", "success");
+    if (many) { picking = false; picked.clear(); }
+  });
+}
+
+/* ------------------------------------------------------------------ users */
+function myPasswordForm() {
+  openModal(`<h2>تغییر رمز من</h2>
+    <label>رمز فعلی<input name="old" type="password" required autocomplete="current-password"></label>
+    <label>رمز جدید<input name="new" type="password" required minlength="6" autocomplete="new-password"></label>
+    <label>تکرار رمز جدید<input name="new2" type="password" required minlength="6" autocomplete="new-password"></label>
+    <p class="hint">بقیه دستگاه‌هایی که با این حساب وارد شده‌اند خارج می‌شوند.</p>
+    ${actions("تغییر رمز")}`,
+  async (fd) => {
+    if (fd.get("new") !== fd.get("new2")) throw new Error("رمز جدید و تکرارش یکی نیست");
+    await act(() => api("PUT", "/api/me/password", { old: fd.get("old"), new: fd.get("new") }), "رمز عوض شد");
+  });
+}
+
+async function usersForm() {
+  const users = await act(() => api("GET", "/api/users"));
+  const me = S.me.username;
+  openModal(`<h2>کاربران</h2>
+    <p class="note"><b>مدیر</b> همه کارها را می‌کند: افزودن، ویرایش و حذف محصولات، سایت‌ها، تنظیمات و کاربران.
+      <b>کاربر</b> فقط محصولات و قیمت‌ها را می‌بیند، می‌تواند قیمت‌ها را دوباره بررسی کند و پوشه‌های خودش را دارد.</p>
+    <div class="table-wrap"><table class="grid"><tr><th>نام کاربری</th><th>نقش</th><th>ساخته شده</th><th></th></tr>
+      ${users.map((u) => `<tr><td><b style="font-weight:500">${esc(u.username)}</b>${u.username === me ? ` <span class="chip">شما</span>` : ""}</td>
+        <td><select data-user-role="${esc(u.username)}" ${u.username === me ? "disabled" : ""}>
+          <option value="user" ${u.role === "user" ? "selected" : ""}>کاربر (فقط دیدن)</option>
+          <option value="admin" ${u.role === "admin" ? "selected" : ""}>مدیر</option></select></td>
+        <td class="small muted">${u.created ? date(u.created, { year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
+        <td><span class="row-acts"><button type="button" class="btn sm ghost" data-user-pass="${esc(u.username)}">رمز جدید</button>
+          ${u.username === me ? "" : `<button type="button" class="btn sm danger" data-user-del="${esc(u.username)}">حذف</button>`}</span></td></tr>`).join("")}
+    </table></div>
+    <fieldset><legend>کاربر جدید</legend>
+      <div class="grid2"><label>نام کاربری<input name="username" maxlength="40" autocomplete="off"></label>
+      <label>رمز (حداقل ۶ حرف)<input name="password" type="text" minlength="6" autocomplete="off"></label></div>
+      <label>نقش<select name="role"><option value="user">کاربر (فقط دیدن)</option><option value="admin">مدیر</option></select></label>
+    </fieldset>
+    <div class="modal-actions"><button type="button" class="btn ghost" data-close-modal>بستن</button><button class="btn primary" type="submit">افزودن کاربر</button></div>`,
+  async (fd) => {
+    const body = { username: (fd.get("username") || "").trim(), password: fd.get("password") || "", role: fd.get("role") };
+    if (!body.username) throw new Error("نام کاربری را بنویسید");
+    await act(() => api("POST", "/api/users", body), `کاربر «${body.username}» ساخته شد`);
+    setTimeout(usersForm, 0); // show the list again, with the new person
+  });
+  $$("#modal-form [data-user-role]").forEach((sel) => (sel.onchange = async () => {
+    try { await act(() => api("PUT", `/api/users/${encodeURIComponent(sel.dataset.userRole)}`, { username: sel.dataset.userRole, role: sel.value }), "نقش عوض شد"); }
+    catch (_) { usersForm(); }
+  }));
+}
+
+async function resetUserPassword(name) {
+  const pw = prompt(`رمز جدید برای «${name}» (حداقل ۶ حرف):`);
+  if (!pw) return;
+  await act(() => api("PUT", `/api/users/${encodeURIComponent(name)}`, { username: name, password: pw }), "رمز عوض شد؛ آن کاربر باید دوباره وارد شود");
+}
+
+async function deleteUser(name) {
+  if (!confirm(`کاربر «${name}» و پوشه‌هایش حذف شود؟`)) return;
+  await act(() => api("DELETE", `/api/users/${encodeURIComponent(name)}`), "کاربر حذف شد");
+  usersForm();
+}
+
 /* --------------------------------------------------------------- actions */
 function addThing(kind) {
+  if (!isAdmin()) return;
   $("#add-pop").classList.remove("open");
   if (kind === "product") productForm();
   else if (kind === "offer") offerForm();
@@ -991,10 +1158,23 @@ function addThing(kind) {
 }
 
 document.addEventListener("click", async (e) => {
-  if (!e.target.closest(".menu")) $("#add-pop").classList.remove("open");
-  const t = e.target.closest("[data-add],[data-close-modal],[data-check-product],[data-check-offer],[data-toggle-offer],[data-del-offer],[data-edit-product],[data-del-product],[data-del-site],[data-r],[data-lg],[data-unit-offer],[data-unit-ex]");
+  if (!e.target.closest(".menu")) { $("#add-pop").classList.remove("open"); $("#user-pop").classList.remove("open"); }
+  const t = e.target.closest("[data-add],[data-close-modal],[data-check-product],[data-check-offer],[data-toggle-offer],[data-del-offer],[data-edit-product],[data-del-product],[data-del-site],[data-r],[data-lg],[data-unit-offer],[data-unit-ex],[data-fav],[data-folders],[data-folder],[data-folder-new],[data-folder-rename],[data-folder-del],[data-user-del],[data-user-pass]");
   if (!t) return;
   const d = t.dataset;
+  if (d.fav) return toggleFav(d.fav);
+  if (d.folders) return folderPicker([d.folders]);
+  if ("folder" in d && !("folderNew" in d)) {
+    folder = d.folder;
+    try { localStorage.setItem("pc-folder", folder); } catch (_) { /* ignore */ }
+    picked.clear();
+    return renderList();
+  }
+  if ("folderNew" in d) return newFolder();
+  if (d.folderRename) return renameFolder(myFolder(d.folderRename));
+  if (d.folderDel) return deleteFolder(myFolder(d.folderDel));
+  if (d.userDel) return deleteUser(d.userDel);
+  if (d.userPass) return resetUserPassword(d.userPass);
   if (d.unitOffer) { e.preventDefault(); return unitForm(S.offers.find((o) => o.id === d.unitOffer)); }
   if (d.unitEx) { const i = $("#modal-form [name=unit]"); i.value = d.unitEx; i.dispatchEvent(new Event("input")); return; }
   if (d.add) return addThing(d.add);
@@ -1041,6 +1221,9 @@ $("#btn-add").onclick = (e) => { e.stopPropagation(); $("#add-pop").classList.to
 $("#btn-check").onclick = () => act(() => api("POST", "/api/check"), "بررسی همه قیمت‌ها شروع شد");
 $("#btn-settings").onclick = settingsForm;
 $("#btn-logout").onclick = async () => { await api("POST", "/api/logout"); location.reload(); };
+$("#btn-user").onclick = (e) => { e.stopPropagation(); $("#user-pop").classList.toggle("open"); };
+$("#btn-mypass").onclick = () => { $("#user-pop").classList.remove("open"); myPasswordForm(); };
+$("#btn-users").onclick = () => { $("#user-pop").classList.remove("open"); usersForm(); };
 $("#btn-theme").onclick = () => {
   const cur = document.documentElement.dataset.theme === "light" ? "dark" : "light";
   document.documentElement.dataset.theme = cur;

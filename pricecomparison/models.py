@@ -105,6 +105,17 @@ class Offer(Model):
 
 
 @dataclass
+class Folder(Model):
+    """A user's own list of products, e.g. "علاقه‌مندی‌ها". Only its owner sees it."""
+
+    owner: str  # username
+    name: str
+    id: str = field(default_factory=lambda: new_id("f"))
+    product_ids: list[str] = field(default_factory=list)
+    created: float = field(default_factory=now)
+
+
+@dataclass
 class Settings(Model):
     interval_min: int = 360  # how often every offer is checked
     timeout_s: int = 20

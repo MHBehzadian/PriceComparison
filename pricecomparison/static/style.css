@@ -353,3 +353,24 @@ td a.cs.shop svg { color: var(--accent); }
 .unit-cell .btn { height: 24px; padding: 0 7px; font-size: 11.5px; }
 td.own-price { white-space: nowrap; color: var(--muted); }
 .ig-price { text-align: end; line-height: 1.7; }
+
+/* ---------- roles ---------- */
+.role-user .admin-only { display: none !important; }
+.userbtn { gap: 6px; }
+.userbtn .chip { height: 18px; font-size: 10.5px; }
+
+/* ---------- folders ---------- */
+.folders { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.fchip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line2);
+  background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.fchip b { font-weight: 600; color: var(--faint); font-size: 11px; }
+.fchip:hover { color: var(--text); }
+.fchip.on { background: var(--primary-bg); border-color: var(--primary-bg); color: var(--primary-fg); }
+.fchip.on b { color: var(--primary-fg); opacity: .7; }
+.fchip.add { border-style: dashed; }
+.factions { font-size: 11.5px; color: var(--faint); width: 100%; }
+.danger-t { color: var(--down); }
+.star { color: var(--faint); }
+.star.on { color: #eab308; }
+.star-btn.on { color: #b45309; border-color: color-mix(in srgb, #eab308 55%, var(--line2)); background: color-mix(in srgb, #eab308 12%, var(--surface)); }
+.fpick { display: grid; gap: 8px; max-height: 40vh; overflow: auto; padding: 2px; }

@@ -24,7 +24,7 @@
   <form class="auth-card" id="auth-form">
     <div class="brand big"><span class="logo"></span><span>PriceComparison</span></div>
     <p class="muted" id="auth-sub">ورود به پنل مقایسه قیمت</p>
-    <label>نام کاربری<input name="username" autocomplete="username" required value="admin"></label>
+    <label>نام کاربری<input name="username" autocomplete="username" required></label>
     <label>رمز عبور<input name="password" type="password" autocomplete="current-password" required minlength="6"></label>
     <button class="btn primary wide" type="submit" id="auth-btn">ورود</button>
     <p class="error" id="auth-err"></p>
@@ -37,8 +37,8 @@
     <div class="stats" id="stats"></div>
     <div class="actions">
       <span class="live" id="live" title="اتصال زنده به پنل"><i></i><span id="last-check">—</span></span>
-      <button class="btn" id="btn-check" title="خواندن دوباره قیمت همه محصولات از همه سایت‌ها">بررسی همه</button>
-      <div class="menu">
+      <button class="btn admin-only" id="btn-check" title="خواندن دوباره قیمت همه محصولات از همه سایت‌ها">بررسی همه</button>
+      <div class="menu admin-only">
         <button class="btn primary" id="btn-add">＋ افزودن</button>
         <div class="menu-pop" id="add-pop">
           <button data-add="product">محصول</button>
@@ -47,15 +47,20 @@
           <button data-add="import">ورود محصولات از صفحه دسته‌بندی</button>
         </div>
       </div>
-      <button class="btn icon" id="btn-settings" title="تنظیمات" aria-label="تنظیمات">
+      <button class="btn icon admin-only" id="btn-settings" title="تنظیمات" aria-label="تنظیمات">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h0a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v0a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
       </button>
       <button class="btn icon" id="btn-theme" title="روشن / تاریک" aria-label="تم">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>
       </button>
-      <button class="btn icon" id="btn-logout" title="خروج" aria-label="خروج">
-        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></svg>
-      </button>
+      <div class="menu">
+        <button class="btn userbtn" id="btn-user" title="حساب کاربری"><span id="me-name"></span><span class="chip" id="me-role"></span></button>
+        <div class="menu-pop" id="user-pop">
+          <button id="btn-mypass">تغییر رمز من</button>
+          <button id="btn-users" class="admin-only">مدیریت کاربران</button>
+          <button id="btn-logout">خروج</button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -63,12 +68,15 @@
     <section class="bench">
       <aside class="plist">
         <input type="search" id="psearch" placeholder="جستجوی محصول…">
-        <div class="plist-tools"><span class="muted small" id="pcount"></span><button class="btn sm ghost" id="btn-pick">انتخاب و حذف چندتایی</button></div>
+        <div class="folders" id="folders"></div>
+        <div class="plist-tools"><span class="muted small" id="pcount"></span><button class="btn sm ghost" id="btn-pick">انتخاب چندتایی</button></div>
         <div class="pick-bar hidden" id="pick-bar">
           <span id="pick-n"></span><span style="flex:1"></span>
           <button class="btn sm" id="pick-all" title="همه محصولاتی که الان در فهرست دیده می‌شوند">همه</button>
           <button class="btn sm ghost" id="pick-none">هیچ</button>
-          <button class="btn sm danger" id="pick-del">حذف</button>
+          <button class="btn sm" id="pick-folder">افزودن به پوشه</button>
+          <button class="btn sm" id="pick-out">خارج از پوشه</button>
+          <button class="btn sm danger admin-only" id="pick-del">حذف</button>
         </div>
         <div class="pitems" id="pitems"></div>
       </aside>
@@ -79,7 +87,7 @@
       <div class="panel">
         <div class="panel-head">
           <h3>سایت‌ها (منابع قیمت)</h3>
-          <button class="btn sm" data-add="site">＋ سایت</button>
+          <button class="btn sm admin-only" data-add="site">＋ سایت</button>
         </div>
         <div class="table-wrap"><table class="grid" id="sites-table"></table></div>
       </div>
