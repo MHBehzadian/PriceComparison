@@ -16,11 +16,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import __version__
-from .auth import COOKIE, SESSION_TTL, Auth
+from .auth import ADMIN, COOKIE, ROLES, SESSION_TTL, USER, Auth, AuthError
 from . import units
 from .extract import ExtractError
 from .importer import Importer
-from .models import UNITS, Offer, Product, Site
+from .models import UNITS, Folder, Offer, Product, Site
 from .monitor import Monitor
 from .scraper import FetchError, Fetcher, HTTPFetcher
 from .sites import seed_sites
@@ -176,22 +176,56 @@ class SetupIn(BaseModel):
     password: str = Field(min_length=6)
 
 
+class UserIn(BaseModel):
+    username: str = Field(min_length=1, max_length=40)
+    password: str = Field("", max_length=200)  # empty: keep the current one (when editing)
+    role: str | None = None  # None: a user when adding, unchanged when editing
+
+    @field_validator("role")
+    @classmethod
+    def _r(cls, v):
+        if v is not None and v not in ROLES:
+            raise ValueError("role")
+        return v
+
+
+class PasswordIn(BaseModel):
+    old: str
+    new: str = Field(min_length=6, max_length=200)
+
+
+class FolderIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+
+
+class FolderItemsIn(BaseModel):
+    product_ids: list[str] = Field(max_length=5000)
+    add: bool = True  # False: take them out
+
+
 # ------------------------------------------------------------------ app
 class Hub:
-    """Live WebSocket clients."""
+    """Live WebSocket clients, each with its session cookie: a message can be
+    shaped per person, and a session that ended (account deleted, password
+    or role changed) is closed instead of fed."""
 
     def __init__(self):
-        self.clients: set[WebSocket] = set()
+        self.clients: dict[WebSocket, str] = {}
 
-    async def send(self, msg: dict) -> None:
+    async def send(self, msg: dict, verify, shape=None) -> None:
         dead = []
-        for ws in list(self.clients):
+        for ws, token in list(self.clients.items()):
+            user = verify(token)
             try:
-                await ws.send_json(msg)
+                if user is None:
+                    await ws.close(code=4401)
+                    dead.append(ws)
+                    continue
+                await ws.send_json(shape(user) if shape else msg)
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.clients.discard(ws)
+            self.clients.pop(ws, None)
 
 
 def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = None, demo: bool = False) -> FastAPI:
@@ -233,11 +267,19 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
     app = FastAPI(title="PriceComparison", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.store, app.state.monitor, app.state.auth = store, mon, auth
 
-    def need_auth(request: Request) -> None:
-        if not auth.verify(request.cookies.get(COOKIE)):
+    def need_auth(request: Request) -> dict:
+        user = auth.verify(request.cookies.get(COOKIE))
+        if user is None:
             raise HTTPException(401, "login required")
+        return user
 
-    A = [Depends(need_auth)]
+    def need_admin(user: dict = Depends(need_auth)) -> dict:
+        if user["role"] != ADMIN:
+            raise HTTPException(403, "این کار فقط برای مدیر مجاز است")
+        return user
+
+    A = [Depends(need_auth)]  # anyone logged in: look, check prices, own folders
+    AD = [Depends(need_admin)]  # change products, links, sites, settings, users
 
     def get(coll: dict, key: str):
         obj = coll.get(key)
@@ -248,31 +290,87 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
     # ---- auth --------------------------------------------------------
     @app.get("/api/session")
     async def session(request: Request):
+        user = auth.verify(request.cookies.get(COOKIE))
         return {
             "configured": auth.configured,
-            "logged_in": auth.verify(request.cookies.get(COOKIE)),
-            "username": auth.username if auth.configured else "",
+            "logged_in": user is not None,
+            "user": user,
             "version": __version__,
         }
 
-    def set_cookie(resp: Response, request: Request) -> None:
+    def set_cookie(resp: Response, request: Request, username: str) -> None:
         secure = request.url.scheme == "https"
-        resp.set_cookie(COOKIE, auth.issue(), max_age=SESSION_TTL, httponly=True, samesite="strict", secure=secure)
+        resp.set_cookie(COOKIE, auth.issue(username), max_age=SESSION_TTL, httponly=True, samesite="strict", secure=secure)
 
     @app.post("/api/setup")
     async def setup(body: SetupIn, request: Request, response: Response):
         if auth.configured:
             raise HTTPException(409, "already configured")
-        auth.set_password(body.username, body.password)
-        set_cookie(response, request)
+        auth.set_password(body.username, body.password, ADMIN)
+        set_cookie(response, request, body.username.strip())
         return {"ok": True}
 
     @app.post("/api/login")
     async def login(body: LoginIn, request: Request, response: Response):
-        if not auth.check(body.username, body.password):
+        name = body.username.strip()
+        if not auth.check(name, body.password):
             await asyncio.sleep(1)
             raise HTTPException(401, "نام کاربری یا رمز عبور اشتباه است")
-        set_cookie(response, request)
+        set_cookie(response, request, name)
+        return {"ok": True}
+
+    @app.put("/api/me/password")
+    async def change_own_password(body: PasswordIn, request: Request, response: Response, user: dict = Depends(need_auth)):
+        if not auth.check(user["username"], body.old):
+            await asyncio.sleep(1)
+            raise HTTPException(403, "رمز فعلی درست نیست")
+        auth.set_password(user["username"], body.new)
+        set_cookie(response, request, user["username"])  # this browser stays logged in, others are logged out
+        return {"ok": True}
+
+    # ---- users (admin) ---------------------------------------------------
+    @app.get("/api/users", dependencies=AD)
+    async def list_users():
+        return auth.list()
+
+    @app.post("/api/users", dependencies=AD)
+    async def add_user(body: UserIn):
+        name = body.username.strip()
+        if name in auth.users:
+            raise HTTPException(409, "این نام کاربری وجود دارد")
+        try:
+            auth.set_password(name, body.password, body.role or USER)
+        except AuthError as e:
+            raise HTTPException(422, str(e)) from None
+        await mon.emit("info", "user", f"کاربر «{name}» ({'مدیر' if body.role == ADMIN else 'کاربر'}) ساخته شد")
+        return {"ok": True}
+
+    @app.put("/api/users/{name}", dependencies=AD)
+    async def edit_user(name: str, body: UserIn):
+        if name not in auth.users:
+            raise HTTPException(404, "not found")
+        try:
+            if body.password:
+                auth.set_password(name, body.password)
+            if body.role is not None and body.role != auth.role(name):
+                auth.set_role(name, body.role)
+        except AuthError as e:
+            raise HTTPException(422, str(e)) from None
+        await broadcast({"type": "state"})  # ends that person's sessions right away
+        return {"ok": True}
+
+    @app.delete("/api/users/{name}")
+    async def del_user(name: str, me: dict = Depends(need_admin)):
+        if name == me["username"]:
+            raise HTTPException(422, "حساب خودتان را نمی‌توانید حذف کنید")
+        try:
+            auth.delete(name)
+        except AuthError as e:
+            raise HTTPException(422, str(e)) from None
+        for f in [f for f in store.folders.values() if f.owner == name]:
+            store.folders.pop(f.id, None)
+        await mon.emit("warning", "user", f"کاربر «{name}» حذف شد")
+        await mon.changed()
         return {"ok": True}
 
     @app.post("/api/logout")
@@ -281,45 +379,106 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"ok": True}
 
     # ---- state -------------------------------------------------------
-    def full_state() -> dict[str, Any]:
+    def shared_state() -> dict[str, Any]:
+        """What everyone sees; full_state() adds what is theirs."""
         return {
             **store.snapshot(),
-            "settings": store.settings.to_dict(),
             "busy": sorted(mon.busy),
             "last_run": mon.last_run,
-            "import": (lambda j: j.to_dict(groups=False) if j else None)(max(imp.jobs.values(), key=lambda j: j.started, default=None)),
             "version": __version__,
             "demo": demo,
             "now": time.time(),
         }
 
-    @app.get("/api/state", dependencies=A)
-    async def state():
-        return {**full_state(), "events": [e.to_dict() for e in store.events[-200:]]}
+    def full_state(user: dict, shared: dict[str, Any] | None = None) -> dict[str, Any]:
+        admin = user["role"] == ADMIN
+        st = {
+            **(shared or shared_state()),
+            "me": user,
+            "folders": [f.to_dict() for f in store.folders_of(user["username"])],
+            # a user only needs to know how often prices are read, not the proxy and the rest
+            "settings": store.settings.to_dict() if admin else {"interval_min": store.settings.interval_min},
+            "import": None,
+        }
+        if admin:
+            job = max(imp.jobs.values(), key=lambda j: j.started, default=None)
+            st["import"] = job.to_dict(groups=False) if job else None
+        return st
+
+    @app.get("/api/state")
+    async def state(user: dict = Depends(need_auth)):
+        return {**full_state(user), "events": [e.to_dict() for e in store.events[-200:]]}
 
     async def broadcast(msg: dict) -> None:
         if msg.get("type") == "state":
-            msg = {"type": "state", "state": full_state()}
-        await hub.send(msg)
+            shared = shared_state()
+            await hub.send(msg, auth.verify, lambda user: {"type": "state", "state": full_state(user, shared)})
+        elif msg.get("type") == "import":
+            await hub.send(msg, auth.verify, lambda user: msg if user["role"] == ADMIN else {"type": "noop"})
+        else:
+            await hub.send(msg, auth.verify)
 
     mon.broadcast = broadcast
     imp.broadcast = broadcast
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
-        if not auth.verify(websocket.cookies.get(COOKIE)):
+        token = websocket.cookies.get(COOKIE) or ""
+        user = auth.verify(token)
+        if user is None:
             await websocket.close(code=4401)
             return
         await websocket.accept()
-        hub.clients.add(websocket)
+        hub.clients[websocket] = token
         try:
-            await websocket.send_json({"type": "state", "state": full_state()})
+            await websocket.send_json({"type": "state", "state": full_state(user)})
             while True:
                 await websocket.receive_text()  # keepalive pings from the page
         except WebSocketDisconnect:
             pass
         finally:
-            hub.clients.discard(websocket)
+            hub.clients.pop(websocket, None)
+
+    # ---- folders (each person's own) -------------------------------------
+    def my_folder(fid: str, user: dict) -> Folder:
+        f = store.folders.get(fid)
+        if f is None or f.owner != user["username"]:
+            raise HTTPException(404, "not found")
+        return f
+
+    @app.post("/api/folders")
+    async def add_folder(body: FolderIn, user: dict = Depends(need_auth)):
+        name = body.name.strip()
+        if any(f.name == name for f in store.folders_of(user["username"])):
+            raise HTTPException(409, "پوشه‌ای با این نام دارید")
+        f = Folder(owner=user["username"], name=name)
+        store.folders[f.id] = f
+        await mon.changed()
+        return f.to_dict()
+
+    @app.put("/api/folders/{fid}")
+    async def rename_folder(fid: str, body: FolderIn, user: dict = Depends(need_auth)):
+        f = my_folder(fid, user)
+        f.name = body.name.strip()
+        await mon.changed()
+        return f.to_dict()
+
+    @app.delete("/api/folders/{fid}")
+    async def del_folder(fid: str, user: dict = Depends(need_auth)):
+        store.folders.pop(my_folder(fid, user).id, None)
+        await mon.changed()
+        return {"ok": True}
+
+    @app.post("/api/folders/{fid}/products")
+    async def folder_products(fid: str, body: FolderItemsIn, user: dict = Depends(need_auth)):
+        f = my_folder(fid, user)
+        ids = [i for i in body.product_ids if i in store.products]
+        if body.add:
+            f.product_ids += [i for i in dict.fromkeys(ids) if i not in f.product_ids]
+        else:
+            f.product_ids = [i for i in f.product_ids if i not in set(ids)]
+        await mon.changed()
+        return f.to_dict()
 
     # ---- sites -------------------------------------------------------
     def domain_taken(domains: list[str], skip: str = "") -> None:
@@ -327,7 +486,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             if s.id != skip and set(s.domains) & set(domains):
                 raise HTTPException(409, f"دامنه {', '.join(set(s.domains) & set(domains))} قبلا برای «{s.name}» ثبت شده")
 
-    @app.post("/api/sites", dependencies=A)
+    @app.post("/api/sites", dependencies=AD)
     async def add_site(body: SiteIn):
         domain_taken(body.domains)
         s = Site(**body.model_dump())
@@ -336,7 +495,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return s.to_dict()
 
-    @app.put("/api/sites/{sid}", dependencies=A)
+    @app.put("/api/sites/{sid}", dependencies=AD)
     async def edit_site(sid: str, body: SiteIn):
         s = get(store.sites, sid)
         domain_taken(body.domains, skip=sid)
@@ -345,7 +504,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return s.to_dict()
 
-    @app.delete("/api/sites/{sid}", dependencies=A)
+    @app.delete("/api/sites/{sid}", dependencies=AD)
     async def del_site(sid: str):
         s = store.sites.pop(sid, None)
         if s is None:
@@ -357,7 +516,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return {"ok": True}
 
-    @app.post("/api/test", dependencies=A)
+    @app.post("/api/test", dependencies=AD)
     async def test_url(body: TestIn):
         """Read a link once with the given settings, without saving anything."""
         site = store.site_for_url(body.url) or Site(name="?", domains=[host_of(body.url)])
@@ -385,7 +544,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         store.offers[o.id] = o
         return o
 
-    @app.post("/api/products", dependencies=A)
+    @app.post("/api/products", dependencies=AD)
     async def add_product(body: ProductIn):
         p = Product(name=body.name, category=body.category, note=body.note, target_price=body.target_price or None)
         new, skipped = [], []
@@ -401,14 +560,14 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             background(mon.check_many(new))
         return {**p.to_dict(), "skipped": skipped}
 
-    @app.put("/api/products/{pid}", dependencies=A)
+    @app.put("/api/products/{pid}", dependencies=AD)
     async def edit_product(pid: str, body: ProductIn):
         p = get(store.products, pid)
         p.name, p.category, p.note, p.target_price = body.name, body.category, body.note, body.target_price or None
         await mon.changed()
         return p.to_dict()
 
-    @app.delete("/api/products/{pid}", dependencies=A)
+    @app.delete("/api/products/{pid}", dependencies=AD)
     async def del_product(pid: str):
         p = store.products.pop(pid, None)
         if p is None:
@@ -416,11 +575,12 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         for o in store.offers_of(pid):
             store.offers.pop(o.id, None)
         store.meta.get("cheapest", {}).pop(pid, None)
+        store.forget_products({pid})
         await mon.emit("warning", "product", f"محصول «{p.name}» حذف شد")
         await mon.changed()
         return {"ok": True}
 
-    @app.post("/api/products/delete", dependencies=A)
+    @app.post("/api/products/delete", dependencies=AD)
     async def del_products(body: IdsIn):
         gone = [store.products.pop(pid) for pid in body.ids if pid in store.products]
         ids = {p.id for p in gone}
@@ -428,6 +588,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             store.offers.pop(o.id, None)
         for pid in ids:
             store.meta.get("cheapest", {}).pop(pid, None)
+        store.forget_products(ids)
         if gone:
             await mon.emit("warning", "product", f"{len(gone)} محصول حذف شد")
         await mon.changed()
@@ -441,7 +602,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"ok": True, "count": len(offers)}
 
     # ---- offers (one product on one site) ------------------------------
-    @app.post("/api/offers", dependencies=A)
+    @app.post("/api/offers", dependencies=AD)
     async def new_offer(body: OfferIn):
         p = get(store.products, body.product_id)
         o = await add_offer(p, body.url, body.site_id, body.create_site)
@@ -449,7 +610,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         background(mon.check_offer(o))
         return o.to_dict()
 
-    @app.put("/api/offers/{oid}", dependencies=A)
+    @app.put("/api/offers/{oid}", dependencies=AD)
     async def edit_offer(oid: str, body: OfferEdit):
         o = get(store.offers, oid)
         if body.url is not None and body.url != o.url:
@@ -463,21 +624,21 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return o.to_dict()
 
-    @app.delete("/api/offers/{oid}", dependencies=A)
+    @app.delete("/api/offers/{oid}", dependencies=AD)
     async def del_offer(oid: str):
         if store.offers.pop(oid, None) is None:
             raise HTTPException(404, "not found")
         await mon.changed()
         return {"ok": True}
 
-    @app.post("/api/units/parse", dependencies=A)
+    @app.post("/api/units/parse", dependencies=AD)
     async def parse_unit(body: UnitIn, offer_id: str = ""):
         o = store.offers.get(offer_id)
         p = store.products.get(o.product_id) if o else None
         q = units.parse_input(body.text, (o.title if o else "") or (p.name if p else ""))
         return {"unit": q.to_dict() if q else None}
 
-    @app.put("/api/offers/{oid}/unit", dependencies=A)
+    @app.put("/api/offers/{oid}/unit", dependencies=AD)
     async def set_offer_unit(oid: str, body: UnitIn):
         o = get(store.offers, oid)
         if not body.text.strip():
@@ -491,7 +652,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return {"unit": o.qty_manual or o.qty}
 
-    @app.put("/api/products/{pid}/ref", dependencies=A)
+    @app.put("/api/products/{pid}/ref", dependencies=AD)
     async def set_product_ref(pid: str, body: RefIn):
         p = get(store.products, pid)
         if not body.dim:
@@ -509,7 +670,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.check_offer(o)
         return o.to_dict()
 
-    @app.post("/api/check", dependencies=A)
+    @app.post("/api/check", dependencies=AD)
     async def check_all():
         offers = [
             o for o in store.offers.values()
@@ -519,7 +680,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"ok": True, "count": len(offers)}
 
     # ---- category import ---------------------------------------------
-    @app.post("/api/import", dependencies=A)
+    @app.post("/api/import", dependencies=AD)
     async def start_import(body: ImportIn):
         if any(j.status == "running" for j in imp.jobs.values()):
             raise HTTPException(409, "یک ورود از دسته‌بندی در جریان است؛ تا تمام شدنش صبر کنید")
@@ -528,16 +689,16 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         await mon.changed()
         return job.to_dict()
 
-    @app.get("/api/import/{jid}", dependencies=A)
+    @app.get("/api/import/{jid}", dependencies=AD)
     async def get_import(jid: str):
         return get(imp.jobs, jid).to_dict()
 
-    @app.post("/api/import/{jid}/cancel", dependencies=A)
+    @app.post("/api/import/{jid}/cancel", dependencies=AD)
     async def cancel_import(jid: str):
         imp.cancel(get(imp.jobs, jid))
         return {"ok": True}
 
-    @app.post("/api/import/{jid}/apply", dependencies=A)
+    @app.post("/api/import/{jid}/apply", dependencies=AD)
     async def apply_import(jid: str, body: ApplyIn):
         job = get(imp.jobs, jid)
         if job.status != "done":
@@ -548,11 +709,11 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"created": created, "linked": linked}
 
     # ---- settings ----------------------------------------------------
-    @app.get("/api/settings", dependencies=A)
+    @app.get("/api/settings", dependencies=AD)
     async def get_settings():
         return store.settings.to_dict()
 
-    @app.put("/api/settings", dependencies=A)
+    @app.put("/api/settings", dependencies=AD)
     async def put_settings(body: SettingsIn):
         for k, v in body.model_dump().items():
             setattr(store.settings, k, v.strip() if isinstance(v, str) else v)

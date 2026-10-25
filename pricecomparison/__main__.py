@@ -25,9 +25,10 @@ def main() -> None:
     dm = sub.add_parser("demo", help="run with sample products and simulated shops")
     dm.add_argument("--host", default="127.0.0.1")
     dm.add_argument("--port", type=int, default=8090)
-    pw = sub.add_parser("passwd", help="set the admin username/password")
+    pw = sub.add_parser("passwd", help="create an account or set its password (an admin, unless --role user)")
     pw.add_argument("--username", default="admin")
     pw.add_argument("--password", help="non-interactive (for install scripts)")
+    pw.add_argument("--role", choices=["admin", "user"], default="admin")
     args = ap.parse_args()
 
     if args.cmd == "passwd":
@@ -42,7 +43,7 @@ def main() -> None:
             p1 = getpass.getpass("New password: ")
             if len(p1) < 6 or p1 != getpass.getpass("Repeat: "):
                 raise SystemExit("passwords differ or shorter than 6 characters")
-        a.set_password(args.username, p1)
+        a.set_password(args.username, p1, args.role)
         print("password updated")
         return
 
