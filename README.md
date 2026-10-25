@@ -85,7 +85,7 @@ https://emalls.ir/لیست-قیمت_مصالح-ساختمانی~Category~70445
 
 اگر واحد هیچ سایتی برای یک محصول معلوم نباشد (مثل گوشی موبایل)، قیمت‌ها همان‌طور که هستند مقایسه می‌شوند.
 
-## نصب
+## نصب روی لینوکس (اوبونتو)
 
 > **مهم:** بیشتر فروشگاه‌های ایرانی درخواست از IP خارج را رد می‌کنند. پنل را روی **سرور داخل ایران** نصب کنید، یا در تنظیمات پنل یک پراکسی ایران بدهید.
 
@@ -108,6 +108,76 @@ sudo PC_PORT=9091 bash deploy/install.sh
 ```bash
 /opt/pricecomparison/venv/bin/python -m pricecomparison --data /var/lib/pricecomparison passwd
 ```
+
+## نصب روی ویندوز سرور
+
+ویندوز سرور ۲۰۱۶ به بالا. همه مراحل داخل ریموت دسکتاپ (RDP) سرور انجام می‌شود. سرور باید داخل ایران باشد، یا در تنظیمات پنل پراکسی ایران داده شود.
+
+**۱. نصب پایتون ۳.۱۲**
+
+از https://www.python.org/downloads/windows/ نسخه **Windows installer (64-bit)** را بگیرید. موقع نصب دو گزینه را تیک بزنید: **Add python.exe to PATH** و در Customize، گزینه **Install for all users**.
+
+اگر مرورگر سرور اجازه دانلود نمی‌دهد (IE Enhanced Security)، همین کار را با PowerShell انجام دهید. PowerShell را **Run as Administrator** باز کنید:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe -OutFile $env:TEMP\python-setup.exe
+Start-Process $env:TEMP\python-setup.exe -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1" -Wait
+```
+
+بعد از نصب، پنجره PowerShell را ببندید و دوباره به‌صورت Administrator باز کنید.
+
+**۲. گرفتن کد پنل**
+
+```powershell
+Invoke-WebRequest https://github.com/MHBehzadian/PriceComparison/archive/refs/heads/claude/optimistic-einstein-mftr6s.zip -OutFile $env:TEMP\pc.zip
+Expand-Archive $env:TEMP\pc.zip -DestinationPath C:\ -Force
+Rename-Item C:\PriceComparison-claude-optimistic-einstein-mftr6s C:\PriceComparison
+```
+
+اگر Git نصب است، `git clone -b claude/optimistic-einstein-mftr6s https://github.com/MHBehzadian/PriceComparison.git C:\PriceComparison` هم همین کار را می‌کند.
+
+**۳. نصب و راه‌اندازی** (PowerShell به‌صورت Administrator)
+
+```powershell
+cd C:\PriceComparison
+powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1
+```
+
+کارهایی که اسکریپت انجام می‌دهد:
+
+- محیط پایتون را می‌سازد و پکیج‌ها را نصب می‌کند.
+- یک رمز تصادفی برای کاربر `admin` می‌سازد و **آن را چاپ می‌کند؛ یادداشتش کنید.**
+- پنل را به‌شکل یک Scheduled Task زیر حساب SYSTEM ثبت می‌کند. پنل با روشن شدن ویندوز بالا می‌آید، با خروج از ریموت خاموش نمی‌شود و اگر متوقف شود حداکثر ظرف ۵ دقیقه دوباره اجرا می‌شود.
+- پورت را در فایروال ویندوز باز می‌کند و آدرس پنل را نشان می‌دهد.
+
+برای پورت دیگر: `-Port 9091`. پیش‌فرض 8090 است و اگر اشغال باشد اسکریپت قبل از هر تغییری متوقف می‌شود.
+
+**۴. باز کردن پنل**
+
+- روی خود سرور: `http://localhost:8090`
+- از کامپیوترهای دیگر شبکه: `http://IP-سرور:8090`. اگر باز نشد، فایروال شبکه شرکت (جدا از فایروال ویندوز) باید این پورت را باز کند. برای دسترسی از بیرون شرکت، بهتر است پنل پشت HTTPS قرار بگیرد (IIS یا nginx به‌عنوان reverse proxy).
+
+**به‌روزرسانی:** کد جدید را روی همان پوشه بریزید. با ZIP: پوشه را با محتوای ZIP جدید جایگزین کنید و `venv` را نگه دارید یا بگذارید از نو ساخته شود. با Git: `git pull`. بعد همان دستور مرحله ۳ را دوباره اجرا کنید. داده‌ها در `C:\ProgramData\PriceComparison` می‌مانند و دست نمی‌خورند.
+
+**کارهای روزمره:**
+
+| کار | دستور (PowerShell به‌صورت Administrator) |
+|---|---|
+| وضعیت | `Get-ScheduledTask PriceComparison \| Get-ScheduledTaskInfo` |
+| توقف / اجرا | `Stop-ScheduledTask PriceComparison` / `Start-ScheduledTask PriceComparison` |
+| لاگ | `Get-Content C:\ProgramData\PriceComparison\panel.log -Tail 50` |
+| تغییر رمز | `C:\PriceComparison\venv\Scripts\python -m pricecomparison --data C:\ProgramData\PriceComparison passwd` |
+| حذف | `powershell -ExecutionPolicy Bypass -File deploy\windows\uninstall.ps1` (داده‌ها می‌مانند؛ با `-RemoveData` پاک می‌شوند) |
+| پشتیبان | کپی پوشه `C:\ProgramData\PriceComparison` |
+
+**سرور بدون اینترنت آزاد:** اگر pip نمی‌تواند پکیج‌ها را دانلود کند، روی یک کامپیوتر ویندوزی دیگر که اینترنت دارد و **همان نسخه پایتون** را دارد، پکیج‌ها را بگیرید:
+
+```powershell
+py -3.12 -m pip download -r requirements.txt -d wheels
+```
+
+پوشه `wheels` (حدود ۵ مگابایت) را با ریموت روی سرور کپی کنید و نصب را با `-Wheels C:\wheels` اجرا کنید.
 
 ## دمو بدون اینترنت
 
