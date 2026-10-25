@@ -8,6 +8,7 @@
 #     -Port 8090                     port of the panel
 #     -DataDir C:\ProgramData\PriceComparison   where products and prices are kept
 #     -Wheels C:\wheels              install packages from this folder (server without internet)
+#     -TrustedProxy 192.168.1.20     IP of the reverse proxy that publishes the panel on the internet
 #
 # Run it again after updating the code: it updates packages and restarts the panel.
 # Data in -DataDir is never touched.
@@ -19,7 +20,8 @@
 param(
     [int]$Port = 8090,
     [string]$DataDir = "$env:ProgramData\PriceComparison",
-    [string]$Wheels = ""
+    [string]$Wheels = "",
+    [string]$TrustedProxy = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -117,6 +119,7 @@ if (-not $hasLogin) {
 # ------------------------------------------------------- background task
 Step "Registering the background task '$TaskName'"
 $arguments = "-m pricecomparison --data `"$DataDir`" --log-file `"$LogFile`" serve --host 0.0.0.0 --port $Port"
+if ($TrustedProxy) { $arguments += " --trusted-proxy $TrustedProxy" }
 $action = New-ScheduledTaskAction -Execute $PyVenv -Argument $arguments -WorkingDirectory $Root
 $atBoot = New-ScheduledTaskTrigger -AtStartup
 # every 5 minutes: starts the panel again if it has stopped (a running copy is left alone)

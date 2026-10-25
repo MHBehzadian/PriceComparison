@@ -158,6 +158,32 @@ powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1
 - روی خود سرور: `http://localhost:8090`
 - از کامپیوترهای دیگر شبکه: `http://IP-سرور:8090`. اگر باز نشد، فایروال شبکه شرکت (جدا از فایروال ویندوز) باید این پورت را باز کند. برای دسترسی از بیرون شرکت، بهتر است پنل پشت HTTPS قرار بگیرد (IIS یا nginx به‌عنوان reverse proxy).
 
+**دسترسی از اینترنت:** آی‌پی سرور داخلی است. پنل را با پورت‌فوروارد مستقیم روی اینترنت نگذارید. آن را از طریق reverse proxy شرکت (nginx، Nginx Proxy Manager یا Caddy) با یک زیردامنه و HTTPS منتشر کنید، دقیقاً مثل بقیه سرویس‌ها. پروکسی باید **WebSocket** را عبور دهد (مسیر `/ws`، برای به‌روزرسانی زنده). نمونه nginx:
+
+```nginx
+server {
+    server_name price.example.ir;
+    location / {
+        proxy_pass http://192.168.1.130:8090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+در Nginx Proxy Manager: یک Proxy Host با Forward به `http://192.168.1.130:8090` بسازید، **Websockets Support** را روشن کنید و در تب SSL گواهی Let's Encrypt و Force SSL را فعال کنید.
+
+بعد نصب را یک بار دیگر با آی‌پی ماشین پروکسی اجرا کنید تا پنل فقط به هدرهای همان پروکسی اعتماد کند و کوکی ورود Secure شود:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows\install.ps1 -TrustedProxy 192.168.1.X
+```
+
 **به‌روزرسانی:** کد جدید را روی همان پوشه بریزید. با ZIP: پوشه را با محتوای ZIP جدید جایگزین کنید و `venv` را نگه دارید یا بگذارید از نو ساخته شود. با Git: `git pull`. بعد همان دستور مرحله ۳ را دوباره اجرا کنید. داده‌ها در `C:\ProgramData\PriceComparison` می‌مانند و دست نمی‌خورند.
 
 **کارهای روزمره:**

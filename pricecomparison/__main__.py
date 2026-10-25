@@ -19,6 +19,9 @@ def main() -> None:
     sv = sub.add_parser("serve", help="run the panel (default)")
     sv.add_argument("--host", default=os.environ.get("PC_HOST", "0.0.0.0"))
     sv.add_argument("--port", type=int, default=int(os.environ.get("PC_PORT", "8090")))
+    sv.add_argument("--trusted-proxy", default=os.environ.get("PC_TRUSTED_PROXY", "127.0.0.1"),
+                    help="IP of the reverse proxy in front of the panel (comma separated); its X-Forwarded-Proto "
+                         "is believed, so the login cookie is marked Secure behind HTTPS")
     dm = sub.add_parser("demo", help="run with sample products and simulated shops")
     dm.add_argument("--host", default="127.0.0.1")
     dm.add_argument("--port", type=int, default=8090)
@@ -82,6 +85,7 @@ def main() -> None:
     tls = {}
     if os.environ.get("PC_SSL_CERT") and os.environ.get("PC_SSL_KEY"):
         tls = {"ssl_certfile": os.environ["PC_SSL_CERT"], "ssl_keyfile": os.environ["PC_SSL_KEY"]}
+    tls["forwarded_allow_ips"] = getattr(args, "trusted_proxy", "127.0.0.1")
     if args.log_file:
         # let uvicorn's own messages reach the log file instead of a console that is not there
         for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
