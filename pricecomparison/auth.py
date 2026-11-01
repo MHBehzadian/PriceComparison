@@ -1,7 +1,9 @@
 """Accounts: PBKDF2 password hashes and HMAC-signed session cookies.
 
-Two roles. An admin manages everything (products, links, sites, imports,
-settings, users); a user sees the panel and keeps their own folders.
+Three roles:
+  superadmin  everything, including accounts and the panel's settings
+  admin       products, links, units, sites and imports
+  user        sees the panel, re-checks prices, keeps their own folders
 """
 
 from __future__ import annotations
@@ -19,8 +21,9 @@ from .store import replace
 
 COOKIE = "pc_session"
 SESSION_TTL = 7 * 24 * 3600
-ADMIN, USER = "admin", "user"
-ROLES = (ADMIN, USER)
+SUPER, ADMIN, USER = "superadmin", "admin", "user"
+ROLES = (SUPER, ADMIN, USER)
+MANAGERS = (SUPER, ADMIN)  # may change products, links, sites
 
 
 def _hash(password: str, salt: bytes) -> str:
@@ -54,15 +57,23 @@ class Auth:
             self._migrate()
 
     def _migrate(self) -> None:
-        # v0.1 had one account at the top level: it becomes the first admin
+        changed = False
+        # v0.1 had one account at the top level
         if "hash" in self.data:
             name = self.data.pop("username", "admin")
             self.data.setdefault("users", {})[name] = {
                 "salt": self.data.pop("salt"), "hash": self.data.pop("hash"), "role": ADMIN, "ver": 0, "created": time.time(),
             }
-            self.data.setdefault("users", {})
+            changed = True
+        users = self.data.setdefault("users", {})
+        # before super admins existed the first admin ran the panel: it becomes the super admin
+        if users and not any(u.get("role") == SUPER for u in users.values()):
+            admins = sorted((u.get("created", 0), n) for n, u in users.items() if u.get("role") == ADMIN)
+            if admins:
+                users[admins[0][1]]["role"] = SUPER
+                changed = True
+        if changed:
             self._save()
-        self.data.setdefault("users", {})
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,7 +91,7 @@ class Auth:
 
     @property
     def configured(self) -> bool:
-        return any(u.get("role") == ADMIN for u in self.users.values())
+        return self._supers() > 0
 
     def role(self, username: str) -> str | None:
         u = self.users.get(username)
@@ -110,8 +121,8 @@ class Auth:
         u = self.users.get(username)
         if u is None:
             raise AuthError("چنین کاربری نیست")
-        if u.get("role") == ADMIN and role != ADMIN and self._admins() == 1:
-            raise AuthError("حداقل یک مدیر باید بماند")
+        if u.get("role") == SUPER and role != SUPER and self._supers() == 1:
+            raise AuthError("حداقل یک مدیر کل باید بماند")
         u["role"] = role
         u["ver"] = u.get("ver", 0) + 1
         self._save()
@@ -120,13 +131,13 @@ class Auth:
         u = self.users.get(username)
         if u is None:
             raise AuthError("چنین کاربری نیست")
-        if u.get("role") == ADMIN and self._admins() == 1:
-            raise AuthError("آخرین مدیر را نمی‌شود حذف کرد")
+        if u.get("role") == SUPER and self._supers() == 1:
+            raise AuthError("آخرین مدیر کل را نمی‌شود حذف کرد")
         del self.users[username]
         self._save()
 
-    def _admins(self) -> int:
-        return sum(1 for u in self.users.values() if u.get("role") == ADMIN)
+    def _supers(self) -> int:
+        return sum(1 for u in self.users.values() if u.get("role") == SUPER)
 
     def check(self, username: str, password: str) -> bool:
         u = self.users.get(username)

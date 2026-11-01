@@ -25,10 +25,10 @@ def main() -> None:
     dm = sub.add_parser("demo", help="run with sample products and simulated shops")
     dm.add_argument("--host", default="127.0.0.1")
     dm.add_argument("--port", type=int, default=8090)
-    pw = sub.add_parser("passwd", help="create an account or set its password (an admin, unless --role user)")
+    pw = sub.add_parser("passwd", help="create an account or set its password (a super admin unless --role says otherwise)")
     pw.add_argument("--username", default="admin")
     pw.add_argument("--password", help="non-interactive (for install scripts)")
-    pw.add_argument("--role", choices=["admin", "user"], default="admin")
+    pw.add_argument("--role", choices=["superadmin", "admin", "user"], default="superadmin")
     args = ap.parse_args()
 
     if args.cmd == "passwd":

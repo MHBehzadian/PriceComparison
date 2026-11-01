@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import __version__
-from .auth import ADMIN, COOKIE, ROLES, SESSION_TTL, USER, Auth, AuthError
+from .auth import ADMIN, COOKIE, MANAGERS, ROLES, SESSION_TTL, SUPER, USER, Auth, AuthError
 from . import units
 from .extract import ExtractError
 from .importer import Importer
@@ -274,12 +274,18 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return user
 
     def need_admin(user: dict = Depends(need_auth)) -> dict:
-        if user["role"] != ADMIN:
+        if user["role"] not in MANAGERS:
             raise HTTPException(403, "این کار فقط برای مدیر مجاز است")
         return user
 
+    def need_super(user: dict = Depends(need_auth)) -> dict:
+        if user["role"] != SUPER:
+            raise HTTPException(403, "این کار فقط برای مدیر کل مجاز است")
+        return user
+
     A = [Depends(need_auth)]  # anyone logged in: look, check prices, own folders
-    AD = [Depends(need_admin)]  # change products, links, sites, settings, users
+    AD = [Depends(need_admin)]  # admins and the super admin: products, links, units, sites, imports
+    SU = [Depends(need_super)]  # the super admin only: accounts and the panel's settings
 
     def get(coll: dict, key: str):
         obj = coll.get(key)
@@ -306,7 +312,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
     async def setup(body: SetupIn, request: Request, response: Response):
         if auth.configured:
             raise HTTPException(409, "already configured")
-        auth.set_password(body.username, body.password, ADMIN)
+        auth.set_password(body.username, body.password, SUPER)
         set_cookie(response, request, body.username.strip())
         return {"ok": True}
 
@@ -329,11 +335,11 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"ok": True}
 
     # ---- users (admin) ---------------------------------------------------
-    @app.get("/api/users", dependencies=AD)
+    @app.get("/api/users", dependencies=SU)
     async def list_users():
         return auth.list()
 
-    @app.post("/api/users", dependencies=AD)
+    @app.post("/api/users", dependencies=SU)
     async def add_user(body: UserIn):
         name = body.username.strip()
         if name in auth.users:
@@ -342,10 +348,11 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             auth.set_password(name, body.password, body.role or USER)
         except AuthError as e:
             raise HTTPException(422, str(e)) from None
-        await mon.emit("info", "user", f"کاربر «{name}» ({'مدیر' if body.role == ADMIN else 'کاربر'}) ساخته شد")
+        role_fa = {SUPER: "مدیر کل", ADMIN: "مدیر", USER: "کاربر"}[body.role or USER]
+        await mon.emit("info", "user", f"کاربر «{name}» ({role_fa}) ساخته شد")
         return {"ok": True}
 
-    @app.put("/api/users/{name}", dependencies=AD)
+    @app.put("/api/users/{name}", dependencies=SU)
     async def edit_user(name: str, body: UserIn):
         if name not in auth.users:
             raise HTTPException(404, "not found")
@@ -360,7 +367,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"ok": True}
 
     @app.delete("/api/users/{name}")
-    async def del_user(name: str, me: dict = Depends(need_admin)):
+    async def del_user(name: str, me: dict = Depends(need_super)):
         if name == me["username"]:
             raise HTTPException(422, "حساب خودتان را نمی‌توانید حذف کنید")
         try:
@@ -391,13 +398,13 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         }
 
     def full_state(user: dict, shared: dict[str, Any] | None = None) -> dict[str, Any]:
-        admin = user["role"] == ADMIN
+        admin = user["role"] in MANAGERS
         st = {
             **(shared or shared_state()),
             "me": user,
             "folders": [f.to_dict() for f in store.folders_of(user["username"])],
-            # a user only needs to know how often prices are read, not the proxy and the rest
-            "settings": store.settings.to_dict() if admin else {"interval_min": store.settings.interval_min},
+            # only the super admin needs the proxy and the rest; others see how often prices are read
+            "settings": store.settings.to_dict() if user["role"] == SUPER else {"interval_min": store.settings.interval_min},
             "import": None,
         }
         if admin:
@@ -414,7 +421,7 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
             shared = shared_state()
             await hub.send(msg, auth.verify, lambda user: {"type": "state", "state": full_state(user, shared)})
         elif msg.get("type") == "import":
-            await hub.send(msg, auth.verify, lambda user: msg if user["role"] == ADMIN else {"type": "noop"})
+            await hub.send(msg, auth.verify, lambda user: msg if user["role"] in MANAGERS else {"type": "noop"})
         else:
             await hub.send(msg, auth.verify)
 
@@ -709,11 +716,11 @@ def create_app(data_dir: str | Path | None = None, fetcher: Fetcher | None = Non
         return {"created": created, "linked": linked}
 
     # ---- settings ----------------------------------------------------
-    @app.get("/api/settings", dependencies=AD)
+    @app.get("/api/settings", dependencies=SU)
     async def get_settings():
         return store.settings.to_dict()
 
-    @app.put("/api/settings", dependencies=AD)
+    @app.put("/api/settings", dependencies=SU)
     async def put_settings(body: SettingsIn):
         for k, v in body.model_dump().items():
             setattr(store.settings, k, v.strip() if isinstance(v, str) else v)

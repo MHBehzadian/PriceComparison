@@ -23,7 +23,10 @@ const hidden = new Set(); // offer ids hidden in the history chart
 let ws = null, wsAlive = false;
 let folder = "";       // product list shows this folder ("" = all products)
 try { folder = localStorage.getItem("pc-folder") || ""; } catch (_) { /* ignore */ }
-const isAdmin = () => !!(S && S.me && S.me.role === "admin");
+// superadmin: everything; admin: products, links, sites, imports; user: looks and keeps folders
+const ROLE_FA = { superadmin: "مدیر کل", admin: "مدیر", user: "کاربر" };
+const isAdmin = () => !!(S && S.me && (S.me.role === "admin" || S.me.role === "superadmin"));
+const isSuper = () => !!(S && S.me && S.me.role === "superadmin");
 const FAV = "علاقه‌مندی‌ها";
 const myFolder = (id) => (S.folders || []).find((f) => f.id === id);
 const favFolder = () => (S.folders || []).find((f) => f.name === FAV);
@@ -200,8 +203,9 @@ function setState(st) {
   S = st;
   skew = st.now - Date.now() / 1000;
   document.body.classList.toggle("role-user", !isAdmin());
+  document.body.classList.toggle("not-super", !isSuper());
   $("#me-name").textContent = S.me ? S.me.username : "";
-  $("#me-role").textContent = isAdmin() ? "مدیر" : "کاربر";
+  $("#me-role").textContent = S.me ? ROLE_FA[S.me.role] || S.me.role : "";
   if (folder && !myFolder(folder)) folder = "";
   if (!product(sel)) sel = S.products.length ? S.products[0].id : null;
   renderAll();
@@ -1106,13 +1110,15 @@ async function usersForm() {
   const users = await act(() => api("GET", "/api/users"));
   const me = S.me.username;
   openModal(`<h2>کاربران</h2>
-    <p class="note"><b>مدیر</b> همه کارها را می‌کند: افزودن، ویرایش و حذف محصولات، سایت‌ها، تنظیمات و کاربران.
+    <p class="note"><b>مدیر کل</b> همه کارها را می‌کند، از جمله ساخت کاربر و تنظیمات پنل.
+      <b>مدیر</b> محصولات، لینک‌ها، واحدها، سایت‌ها و ورود از دسته‌بندی را مدیریت می‌کند، ولی به کاربران و تنظیمات دسترسی ندارد.
       <b>کاربر</b> فقط محصولات و قیمت‌ها را می‌بیند، می‌تواند قیمت‌ها را دوباره بررسی کند و پوشه‌های خودش را دارد.</p>
     <div class="table-wrap"><table class="grid"><tr><th>نام کاربری</th><th>نقش</th><th>ساخته شده</th><th></th></tr>
       ${users.map((u) => `<tr><td><b style="font-weight:500">${esc(u.username)}</b>${u.username === me ? ` <span class="chip">شما</span>` : ""}</td>
         <td><select data-user-role="${esc(u.username)}" ${u.username === me ? "disabled" : ""}>
           <option value="user" ${u.role === "user" ? "selected" : ""}>کاربر (فقط دیدن)</option>
-          <option value="admin" ${u.role === "admin" ? "selected" : ""}>مدیر</option></select></td>
+          <option value="admin" ${u.role === "admin" ? "selected" : ""}>مدیر (محصولات و سایت‌ها)</option>
+          <option value="superadmin" ${u.role === "superadmin" ? "selected" : ""}>مدیر کل</option></select></td>
         <td class="small muted">${u.created ? date(u.created, { year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
         <td><span class="row-acts"><button type="button" class="btn sm ghost" data-user-pass="${esc(u.username)}">رمز جدید</button>
           ${u.username === me ? "" : `<button type="button" class="btn sm danger" data-user-del="${esc(u.username)}">حذف</button>`}</span></td></tr>`).join("")}
@@ -1120,7 +1126,7 @@ async function usersForm() {
     <fieldset><legend>کاربر جدید</legend>
       <div class="grid2"><label>نام کاربری<input name="username" maxlength="40" autocomplete="off"></label>
       <label>رمز (حداقل ۶ حرف)<input name="password" type="text" minlength="6" autocomplete="off"></label></div>
-      <label>نقش<select name="role"><option value="user">کاربر (فقط دیدن)</option><option value="admin">مدیر</option></select></label>
+      <label>نقش<select name="role"><option value="user">کاربر (فقط دیدن)</option><option value="admin">مدیر (محصولات و سایت‌ها)</option><option value="superadmin">مدیر کل</option></select></label>
     </fieldset>
     <div class="modal-actions"><button type="button" class="btn ghost" data-close-modal>بستن</button><button class="btn primary" type="submit">افزودن کاربر</button></div>`,
   async (fd) => {

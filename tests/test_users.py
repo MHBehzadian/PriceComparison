@@ -25,7 +25,7 @@ def two(tmp_path, monkeypatch):
 
 def test_session_says_who_and_what(two):
     admin, user, _ = two
-    assert admin.get("/api/session").json()["user"] == {"username": "boss", "role": "admin"}
+    assert admin.get("/api/session").json()["user"] == {"username": "boss", "role": "superadmin"}
     assert user.get("/api/session").json()["user"] == {"username": "ali", "role": "user"}
     assert user.get("/api/state").json()["me"]["role"] == "user"
 
@@ -105,10 +105,12 @@ def test_user_admin(two):
     assert admin.put("/api/users/boss", json={"username": "boss", "password": "secret1"}).status_code == 200
     admin.post("/api/login", json={"username": "boss", "password": "secret1"})
     assert admin.get("/api/settings").status_code == 200
-    # promoted: admin rights at once (and a fresh login, since the role changed)
-    admin.put("/api/users/ali", json={"username": "ali", "role": "admin"})
+    # promoted: rights at once (and a fresh login, since the role changed)
+    admin.put("/api/users/ali", json={"username": "ali", "role": "superadmin"})
     user.post("/api/login", json={"username": "ali", "password": "newpass1"})
     assert user.get("/api/settings").status_code == 200
+    # with two super admins, one may step down
+    assert admin.put("/api/users/ali", json={"username": "ali", "role": "user"}).status_code == 200
     # deleting someone removes their folders
     assert admin.delete("/api/users/ali").status_code == 200
     assert not store.folders and user.get("/api/state").status_code == 401
@@ -132,6 +134,41 @@ def test_old_single_admin_file_is_migrated(tmp_path):
     old.data.pop("users", None)
     (tmp_path / "auth.json").write_text(json.dumps(old.data), encoding="utf-8")
     a = Auth(tmp_path / "auth.json")
-    assert a.check("admin", "secret1") and a.role("admin") == "admin" and a.configured
+    # the one account ran the whole panel: it becomes the super admin
+    assert a.check("admin", "secret1") and a.role("admin") == "superadmin" and a.configured
     assert "hash" not in json.loads((tmp_path / "auth.json").read_text(encoding="utf-8"))
-    assert a.verify(a.issue("admin")) == {"username": "admin", "role": "admin"}
+    assert a.verify(a.issue("admin")) == {"username": "admin", "role": "superadmin"}
+
+
+def test_admins_from_before_super_admins(tmp_path):
+    # accounts made when "admin" was the top role: the oldest admin becomes super admin
+    data = {"secret": "s" * 64, "users": {
+        "second": {"salt": "00", "hash": "x", "role": "admin", "ver": 1, "created": 200},
+        "first": {"salt": "00", "hash": "x", "role": "admin", "ver": 1, "created": 100},
+        "ali": {"salt": "00", "hash": "x", "role": "user", "ver": 1, "created": 50},
+    }}
+    (tmp_path / "auth.json").write_text(json.dumps(data), encoding="utf-8")
+    a = Auth(tmp_path / "auth.json")
+    assert [a.role(n) for n in ("first", "second", "ali")] == ["superadmin", "admin", "user"]
+
+
+def test_admin_manages_products_but_not_accounts_or_settings(two):
+    boss, ali, store = two
+    assert boss.put("/api/users/ali", json={"username": "ali", "role": "admin"}).status_code == 200
+    ali.post("/api/login", json={"username": "ali", "password": "secret2"})
+    assert ali.get("/api/session").json()["user"]["role"] == "admin"
+    # products, links, sites: yes
+    pid = ali.post("/api/products", json={"name": "سیمان", "urls": ["https://masaleh-tehran.ir/p/1"]}).json()["id"]
+    assert ali.put(f"/api/products/{pid}", json={"name": "سیمان تیپ ۲"}).status_code == 200
+    assert ali.post("/api/sites", json={"name": "x", "domains": ["x.ir"]}).status_code == 200
+    assert ali.post("/api/check").status_code == 200
+    # accounts and settings: no
+    for method, path, body in [
+        ("get", "/api/users", None), ("post", "/api/users", {"username": "z", "password": "secret9"}),
+        ("put", "/api/users/boss", {"username": "boss", "role": "user"}), ("delete", "/api/users/boss", None),
+        ("get", "/api/settings", None), ("put", "/api/settings", {"user_agent": "Mozilla/5.0 test agent"}),
+    ]:
+        r = getattr(ali, method)(path, json=body) if body is not None else getattr(ali, method)(path)
+        assert r.status_code == 403, (method, path)
+    assert "proxy" not in ali.get("/api/state").json()["settings"]
+    assert ali.delete(f"/api/products/{pid}").status_code == 200

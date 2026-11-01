@@ -355,7 +355,7 @@ td.own-price { white-space: nowrap; color: var(--muted); }
 .ig-price { text-align: end; line-height: 1.7; }
 
 /* ---------- roles ---------- */
-.role-user .admin-only { display: none !important; }
+.role-user .admin-only, .not-super .super-only { display: none !important; }
 .userbtn { gap: 6px; }
 .userbtn .chip { height: 18px; font-size: 10.5px; }
 
